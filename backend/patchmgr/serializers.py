@@ -1,4 +1,5 @@
 from django.db import transaction
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import (
@@ -12,6 +13,7 @@ from .models import (
     Policy,
     PolicyStage,
 )
+from .services import assess_vulnerabilities
 
 
 class EndpointGroupSerializer(serializers.ModelSerializer):
@@ -46,12 +48,31 @@ class EndpointSerializer(serializers.ModelSerializer):
         fields = ['id', 'hostname', 'os_name', 'os_build', 'group', 'group_name', 'last_reported_at']
 
 
+class VulnerabilitySerializer(serializers.Serializer):
+    """PC에 설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는지에 대한 판단 결과"""
+
+    cve_id = serializers.CharField()
+    severity = serializers.CharField()
+    cvss_score = serializers.DecimalField(max_digits=3, decimal_places=1, allow_null=True)
+    software = serializers.CharField()
+    installed_version = serializers.CharField()
+    status = serializers.ChoiceField(choices=['vulnerable', 'unknown'])
+
+
 class EndpointDetailSerializer(EndpointSerializer):
     installed_software = InstalledSoftwareSerializer(many=True)
     patch_statuses = PatchStatusSerializer(many=True)
+    vulnerabilities = serializers.SerializerMethodField()
 
     class Meta(EndpointSerializer.Meta):
-        fields = EndpointSerializer.Meta.fields + ['installed_software', 'patch_statuses']
+        fields = EndpointSerializer.Meta.fields + ['installed_software', 'patch_statuses', 'vulnerabilities']
+
+    @extend_schema_field(VulnerabilitySerializer(many=True))
+    def get_vulnerabilities(self, obj):
+        findings = assess_vulnerabilities(endpoint=obj)
+        order = {'vulnerable': 0, 'unknown': 1}
+        findings.sort(key=lambda f: (order[f['status']], f['cve_id']))
+        return VulnerabilitySerializer(findings, many=True).data
 
 
 class AffectedSoftwareSerializer(serializers.ModelSerializer):

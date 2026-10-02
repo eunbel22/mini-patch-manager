@@ -1,15 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from types import SimpleNamespace
 from unittest import mock
 from urllib.error import HTTPError
 
 from django.conf import settings
 from django.core.management import call_command
+from packaging.version import Version
 from rest_framework.test import APITestCase
 
 from config.celery import app as celery_app
 
-from . import nvd, tasks
+from . import nvd, services, tasks, versions
 from .models import (
     CVE,
     AffectedSoftware,
@@ -400,3 +402,117 @@ class SeedCpeMappingsTests(APITestCase):
     def test_seed_demo_also_creates_mappings(self):
         call_command('seed_demo', stdout=StringIO())
         self.assertEqual(Software.objects.get(name='Google Chrome').cpes.get().product, 'chrome')
+
+
+def bounds(**kwargs):
+    """AffectedSoftware 한 줄과 같은 칸을 가진 시험용 값 (안 준 칸은 빈 문자열)"""
+    fields = ['version_start_including', 'version_start_excluding', 'version_end_including',
+              'version_end_excluding', 'version_exact']
+    return SimpleNamespace(**{name: kwargs.get(name, '') for name in fields})
+
+
+class VersionCompareTests(APITestCase):
+    def test_parse_version_formats(self):
+        self.assertEqual(versions.parse_version('8u421'), Version('8.0.421'))  # Java식
+        self.assertEqual(versions.parse_version('v1.2'), Version('1.2'))
+        self.assertEqual(versions.parse_version(' 128.0.6613.84 '), Version('128.0.6613.84'))
+        for unreadable in ('', None, 'abc', '1.x.y z'):
+            self.assertIsNone(versions.parse_version(unreadable))
+
+    def test_versions_are_compared_as_numbers_not_text(self):
+        self.assertTrue(versions.parse_version('9.0') < versions.parse_version('10.0'))
+        self.assertTrue(versions.parse_version('2.0-beta9') < versions.parse_version('2.0'))  # 시험판이 먼저
+        self.assertTrue(versions.parse_version('24.003.0') < versions.parse_version('24.003.20112'))
+
+    def test_end_excluding(self):
+        row = bounds(version_end_excluding='128.0.6613.84')
+        self.assertIs(versions.is_affected('124.0', row), True)
+        self.assertIs(versions.is_affected('128.0.6613.84', row), False)  # 미만이라 같은 버전은 제외
+        self.assertIs(versions.is_affected('130.0', row), False)
+
+    def test_end_including_and_start_bounds(self):
+        row = bounds(version_start_including='2.13.0', version_end_including='2.15.0')
+        self.assertIs(versions.is_affected('2.13.0', row), True)
+        self.assertIs(versions.is_affected('2.15.0', row), True)  # 이하라 같은 버전도 포함
+        self.assertIs(versions.is_affected('2.12.9', row), False)
+        self.assertIs(versions.is_affected('2.15.1', row), False)
+        excluding = bounds(version_start_excluding='2.13.0')
+        self.assertIs(versions.is_affected('2.13.0', excluding), False)  # 초과라 같은 버전은 제외
+        self.assertIs(versions.is_affected('2.13.1', excluding), True)
+
+    def test_exact_version(self):
+        row = bounds(version_exact='2.0')
+        self.assertIs(versions.is_affected('2.0', row), True)
+        self.assertIs(versions.is_affected('2.0.1', row), False)
+
+    def test_no_bounds_means_every_version(self):
+        self.assertIs(versions.is_affected('1.0', bounds()), True)
+        self.assertIs(versions.is_affected('whatever', bounds()), True)  # 범위가 없으면 버전을 읽을 필요도 없다
+
+    def test_unreadable_versions_are_unknown(self):
+        self.assertIsNone(versions.is_affected('abc', bounds(version_end_excluding='1.0')))
+        self.assertIsNone(versions.is_affected('1.0', bounds(version_end_excluding='abc')))
+
+    def test_a_failed_readable_condition_wins_over_an_unreadable_one(self):
+        row = bounds(version_start_including='5.0', version_end_excluding='abc')
+        self.assertIs(versions.is_affected('1.0', row), False)  # 시작 조건에서 이미 어긋남
+
+
+class VulnerabilityAssessmentTests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        group = EndpointGroup.objects.create(name='일반')
+        cls.chrome = Software.objects.create(name='Google Chrome', vendor='Google')
+        cls.log4j = Software.objects.create(name='Apache Log4j', vendor='Apache')
+
+        def pc(name, chrome=None, log4j=None):
+            endpoint = Endpoint.objects.create(hostname=name, os_name='Windows 10 22H2', os_build='1', group=group)
+            if chrome:
+                InstalledSoftware.objects.create(endpoint=endpoint, software=cls.chrome, version=chrome)
+            if log4j:
+                InstalledSoftware.objects.create(endpoint=endpoint, software=cls.log4j, version=log4j)
+            return endpoint
+
+        cls.old = pc('pc-old', chrome='124.0', log4j='2.14.0')
+        cls.new = pc('pc-new', chrome='130.0', log4j='2.17.1')
+        cls.broken = pc('pc-broken', chrome='unknown-build')
+
+        chrome_cve = CVE.objects.create(cve_id='CVE-2024-7971', cvss_score='8.8', severity='high')
+        AffectedSoftware.objects.create(cve=chrome_cve, software=cls.chrome, version_end_excluding='128.0.6613.84')
+        log4j_cve = CVE.objects.create(cve_id='CVE-2021-44228', cvss_score='10.0', severity='critical')
+        # 같은 CVE에 범위가 두 줄
+        AffectedSoftware.objects.create(cve=log4j_cve, software=cls.log4j,
+                                        version_start_including='2.4.0', version_end_excluding='2.12.2')
+        AffectedSoftware.objects.create(cve=log4j_cve, software=cls.log4j,
+                                        version_start_including='2.13.0', version_end_excluding='2.15.0')
+        cls.unscored_cve = CVE.objects.create(cve_id='CVE-2026-0001')
+        AffectedSoftware.objects.create(cve=cls.unscored_cve, software=cls.log4j)  # 모든 버전
+
+    def _findings(self, endpoint):
+        return {(f['cve_id'], f['status']) for f in services.assess_vulnerabilities(endpoint=endpoint)}
+
+    def test_old_pc_is_vulnerable_new_pc_is_not(self):
+        self.assertEqual(self._findings(self.old), {
+            ('CVE-2024-7971', 'vulnerable'), ('CVE-2021-44228', 'vulnerable'), ('CVE-2026-0001', 'vulnerable'),
+        })
+        # 새 PC: Chrome 130과 Log4j 2.17.1은 범위 밖이라 CVE 둘은 없고, 모든 버전 해당인 CVE만 남는다
+        self.assertEqual(self._findings(self.new), {('CVE-2026-0001', 'vulnerable')})
+
+    def test_unreadable_version_is_unknown_not_vulnerable(self):
+        self.assertEqual(self._findings(self.broken), {('CVE-2024-7971', 'unknown')})
+
+    def test_endpoint_detail_lists_vulnerable_first(self):
+        body = self.client.get(f'/api/endpoints/{self.old.id}/').json()
+        self.assertEqual(len(body['vulnerabilities']), 3)
+        self.assertTrue(all(v['status'] == 'vulnerable' for v in body['vulnerabilities']))
+        chrome = next(v for v in body['vulnerabilities'] if v['cve_id'] == 'CVE-2024-7971')
+        self.assertEqual((chrome['software'], chrome['installed_version'], chrome['severity']),
+                         ('Google Chrome', '124.0', 'high'))
+        broken = self.client.get(f'/api/endpoints/{self.broken.id}/').json()
+        self.assertEqual(broken['vulnerabilities'][0]['status'], 'unknown')
+
+    def test_dashboard_counts_endpoints_by_severity_and_unknown_separately(self):
+        body = self.client.get('/api/dashboard/summary/').json()
+        counts = body['software_vulnerable_endpoints_by_severity']
+        self.assertEqual(counts, {'critical': 1, 'high': 1, 'medium': 0, 'low': 0, 'unscored': 2})
+        self.assertEqual(body['unknown_assessments'], 1)
