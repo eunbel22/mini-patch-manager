@@ -42,6 +42,31 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 | 단계적 배포 | `POST /api/policies/{id}/deploy` | 배포 시작 (테스트 그룹 먼저) |
 | | `GET /api/policies/{id}/status` | 단계별 진행 상태, 오류 보고, 롤백 표시 |
 
+모든 주소는 끝에 `/`를 붙여 호출한다 (예: `POST /api/agents/report/`).
+
+### 에이전트 보고 요청 모양
+
+`POST /api/agents/report/`. PC가 자기 상태만 알리고, 패치별 상태(적용 · 미적용 · 오류)는 서버가 정한다. 형식을 확인하고 바로 `202 Accepted`로 응답하며, 처리는 Celery 작업이 한다. 등록되지 않은 PC는 `404`, 형식이 틀리면 `400`.
+
+```json
+{
+  "hostname": "pc-001",
+  "os_name": "Windows 10 22H2",
+  "os_build": "10.0.19045.4000",
+  "installed_software": [{"name": "Google Chrome", "vendor": "Google", "version": "130.0"}],
+  "installed_kbs": ["KB5044273"],
+  "errors": [{"kb_number": "KB5044285", "error_code": "0x80070643"}]
+}
+```
+
+- `installed_software`는 전체 목록이다. 서버는 목록에 없는 소프트웨어를 지운다.
+- 서버는 PC의 `os_name`과 `target_os`가 같은 패치만 판단한다. KB가 `errors`에 있으면 오류, `installed_kbs`에 있으면 적용, 둘 다 없으면 미적용이다. 롤백된 패치는 미적용으로 보고해도 롤백 상태를 유지한다.
+- 패치를 오류로 보고한 PC가 하나라도 있으면 그 패치의 `is_error_reported`가 true가 되고, 모두 사라지면 false가 된다.
+
+### 대시보드 요약 (현재 범위)
+
+`GET /api/dashboard/summary/`는 패치율(적용 / 전체), 상태별 건수, 보고한 PC 수를 준다. 위험도별 미적용 PC와 진행 중인 배포는 Day 4에 더한다.
+
 ## 4. ERD
 
 ```mermaid

@@ -1,7 +1,13 @@
-from rest_framework import mixins, viewsets
+from drf_spectacular.utils import OpenApiResponse, extend_schema
+from rest_framework import mixins, status, viewsets
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import CVE, Endpoint, EndpointGroup, Patch, Policy
+from .services import dashboard_summary
+from .tasks import process_agent_report
 from .serializers import (
+    AgentReportSerializer,
     CVESerializer,
     EndpointDetailSerializer,
     EndpointGroupSerializer,
@@ -56,3 +62,31 @@ class PolicyViewSet(viewsets.ModelViewSet):
 
     queryset = Policy.objects.prefetch_related('stages').order_by('id')
     serializer_class = PolicySerializer
+
+
+class AgentReportView(APIView):
+    """에이전트 상태 보고. 형식만 확인하고 바로 202로 응답하며, 패치 상태 갱신은 Celery 작업이 처리한다."""
+
+    @extend_schema(
+        request=AgentReportSerializer,
+        responses={
+            202: OpenApiResponse(description='접수됨. 처리는 비동기로 진행된다.'),
+            404: OpenApiResponse(description='등록되지 않은 PC'),
+        },
+    )
+    def post(self, request):
+        serializer = AgentReportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        if not Endpoint.objects.filter(hostname=payload['hostname']).exists():
+            return Response({'detail': '등록되지 않은 PC입니다.'}, status=status.HTTP_404_NOT_FOUND)
+        process_agent_report.delay(payload)
+        return Response({'status': 'accepted'}, status=status.HTTP_202_ACCEPTED)
+
+
+class DashboardSummaryView(APIView):
+    """패치율과 상태별 건수 (대시보드 화면에서 위험도별 미적용 PC 등은 이후에 더한다)"""
+
+    @extend_schema(responses={200: OpenApiResponse(description='패치 적용 현황 요약')})
+    def get(self, request):
+        return Response(dashboard_summary())
