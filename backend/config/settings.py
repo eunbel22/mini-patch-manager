@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -57,6 +58,21 @@ REST_FRAMEWORK = {
     # 목록은 50개씩 나눠서 준다 (응답: count, next, previous, results)
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
+}
+
+# Celery: 메시지 중개자(broker)는 docker-compose의 RabbitMQ. 기본값은 개발용 guest 계정이다.
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'amqp://guest:guest@localhost:5672//')
+CELERY_TIMEZONE = 'Asia/Seoul'
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# Celery Beat: 일정한 간격으로 작업을 큐에 넣는다. NVD는 호출 간격을 두라고 권하므로 기본은 6시간마다,
+# 매번 최근 12시간 안에 바뀐 CVE를 가져온다(겹쳐도 같은 CVE는 갱신될 뿐이라 안전하다).
+CELERY_BEAT_SCHEDULE = {
+    'fetch-recent-cves': {
+        'task': 'patchmgr.tasks.fetch_recent_cves',
+        'schedule': timedelta(minutes=int(os.environ.get('NVD_FETCH_INTERVAL_MINUTES', '360'))),
+        'kwargs': {'hours': 12},
+    },
 }
 
 SPECTACULAR_SETTINGS = {

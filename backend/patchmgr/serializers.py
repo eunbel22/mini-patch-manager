@@ -136,3 +136,25 @@ class PolicySerializer(serializers.ModelSerializer):
             instance.stages.all().delete()
             PolicyStage.objects.bulk_create(PolicyStage(policy=instance, **stage) for stage in stages)
         return instance
+
+
+class ReportedSoftwareSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=200)
+    vendor = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
+    version = serializers.CharField(max_length=100)
+
+
+class ReportedErrorSerializer(serializers.Serializer):
+    kb_number = serializers.CharField(max_length=20)
+    error_code = serializers.CharField(max_length=50)
+
+
+class AgentReportSerializer(serializers.Serializer):
+    """에이전트(PC)가 보내는 보고. 설치된 SW 전체, 설치된 KB 전체, 설치에 실패한 KB와 오류 코드."""
+
+    hostname = serializers.CharField(max_length=100)
+    os_name = serializers.CharField(max_length=100)
+    os_build = serializers.CharField(max_length=50)
+    installed_software = ReportedSoftwareSerializer(many=True, required=False, default=list)
+    installed_kbs = serializers.ListField(child=serializers.CharField(max_length=20), required=False, default=list)
+    errors = ReportedErrorSerializer(many=True, required=False, default=list)

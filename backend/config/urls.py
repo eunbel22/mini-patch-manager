@@ -14,6 +14,8 @@ router.register('policies', views.PolicyViewSet, basename='policy')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/agents/report/', views.AgentReportView.as_view(), name='agent-report'),
+    path('api/dashboard/summary/', views.DashboardSummaryView.as_view(), name='dashboard-summary'),
     path('api/', include(router.urls)),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),

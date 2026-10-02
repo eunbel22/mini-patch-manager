@@ -1,8 +1,15 @@
+from datetime import datetime, timedelta, timezone
 from io import StringIO
+from unittest import mock
+from urllib.error import HTTPError
 
+from django.conf import settings
 from django.core.management import call_command
 from rest_framework.test import APITestCase
 
+from config.celery import app as celery_app
+
+from . import nvd, tasks
 from .models import (
     CVE,
     Endpoint,
@@ -121,3 +128,180 @@ class SeedDemoTests(APITestCase):
         first = self._counts()
         call_command('seed_demo', stdout=StringIO())
         self.assertEqual(self._counts(), first)
+
+
+class SeedSamplePatchesTests(APITestCase):
+    def test_creates_cve_with_four_patches_and_is_repeatable(self):
+        call_command('seed_sample_patches', stdout=StringIO())
+        call_command('seed_sample_patches', stdout=StringIO())
+        self.assertEqual(CVE.objects.count(), 1)
+        self.assertEqual(Patch.objects.count(), 4)
+        cve = CVE.objects.get(cve_id='CVE-2024-43572')
+        self.assertEqual(cve.patches.count(), 4)
+        self.assertEqual(str(cve.cvss_score), '7.8')
+
+
+class AgentReportApiTests(ApiTestBase):
+    """보고 API. 테스트에서는 Celery 작업을 큐를 거치지 않고 바로 실행한다(eager)."""
+
+    def setUp(self):
+        celery_app.conf.task_always_eager = True
+        self.addCleanup(setattr, celery_app.conf, 'task_always_eager', False)
+
+    def _report(self, **extra):
+        payload = {
+            'hostname': 'pc-001',
+            'os_name': 'Windows 10 22H2',
+            'os_build': '10.0.19045.5011',
+            'installed_software': [{'name': 'Google Chrome', 'vendor': 'Google', 'version': '130.0'}],
+            'installed_kbs': ['KB5044273'],
+            'errors': [],
+        }
+        payload.update(extra)
+        return self.client.post('/api/agents/report/', payload, format='json')
+
+    def test_report_is_accepted_and_applied(self):
+        PatchStatus.objects.filter(endpoint=self.pc1).update(status='pending')
+        response = self._report()
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(PatchStatus.objects.get(endpoint=self.pc1, patch=self.patch).status, 'applied')
+        self.pc1.refresh_from_db()
+        self.assertEqual(self.pc1.os_build, '10.0.19045.5011')
+        self.assertIsNotNone(self.pc1.last_reported_at)
+
+    def test_installed_software_is_replaced_by_the_report(self):
+        self._report()
+        names = list(self.pc1.installed_software.values_list('software__name', flat=True))
+        self.assertEqual(names, ['Google Chrome'])  # 기존 Apache Log4j는 보고에 없으므로 지워진다
+
+    def test_error_report_marks_patch_and_clears_when_resolved(self):
+        PatchStatus.objects.filter(endpoint=self.pc2).delete()  # 기본 데이터의 다른 PC 오류를 치운다
+        self._report(installed_kbs=[], errors=[{'kb_number': 'KB5044273', 'error_code': '0x80070643'}])
+        status = PatchStatus.objects.get(endpoint=self.pc1, patch=self.patch)
+        self.assertEqual((status.status, status.error_code), ('error', '0x80070643'))
+        self.patch.refresh_from_db()
+        self.assertTrue(self.patch.is_error_reported)
+
+        self._report()  # 다음 보고에서 설치에 성공
+        self.patch.refresh_from_db()
+        self.assertFalse(self.patch.is_error_reported)
+
+    def test_rolled_back_status_is_kept_when_not_installed(self):
+        PatchStatus.objects.filter(endpoint=self.pc1).update(status='rolled_back')
+        self._report(installed_kbs=[])
+        self.assertEqual(PatchStatus.objects.get(endpoint=self.pc1, patch=self.patch).status, 'rolled_back')
+
+    def test_patches_for_other_os_are_ignored(self):
+        before = PatchStatus.objects.filter(endpoint=self.pc2).count()
+        self._report(hostname='pc-002', os_name='Windows 11 23H2', installed_kbs=['KB5044273'])
+        self.assertEqual(PatchStatus.objects.filter(endpoint=self.pc2, patch=self.patch).count(), before)
+
+    def test_unknown_hostname_is_rejected(self):
+        self.assertEqual(self._report(hostname='no-such-pc').status_code, 404)
+
+    def test_invalid_payload_is_rejected(self):
+        response = self.client.post('/api/agents/report/', {'os_name': 'Windows 10 22H2'}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+
+class DashboardSummaryTests(ApiTestBase):
+    def test_summary_counts_and_rate(self):
+        body = self.client.get('/api/dashboard/summary/').json()
+        self.assertEqual(body['total'], 2)
+        self.assertEqual(body['status_counts']['applied'], 1)
+        self.assertEqual(body['status_counts']['error'], 1)
+        self.assertEqual(body['patch_rate'], 0.5)
+
+    def test_rate_is_null_without_data(self):
+        PatchStatus.objects.all().delete()
+        self.assertIsNone(self.client.get('/api/dashboard/summary/').json()['patch_rate'])
+
+
+def nvd_item(cve_id='CVE-2024-43572', metrics=None, published='2024-10-08T00:00:00.000', description='desc'):
+    """NVD 응답의 vulnerabilities 항목 하나와 같은 모양의 시험용 데이터"""
+    cve = {
+        'id': cve_id,
+        'published': published,
+        'descriptions': [{'lang': 'es', 'value': 'descripcion'}, {'lang': 'en', 'value': description}],
+        'metrics': metrics or {},
+    }
+    return {'cve': cve}
+
+
+def metric(score, severity, source='nvd@nist.gov', kind='Primary'):
+    return {'source': source, 'type': kind, 'cvssData': {'baseScore': score, 'baseSeverity': severity}}
+
+
+class NvdParseTests(APITestCase):
+    def test_uses_english_description_and_primary_v31_score(self):
+        item = nvd_item(metrics={'cvssMetricV31': [
+            metric(5.0, 'MEDIUM', source='vendor@example.com', kind='Secondary'),
+            metric(7.8, 'HIGH'),
+        ]})
+        parsed = nvd.parse_cve(item)
+        self.assertEqual(parsed['description'], 'desc')
+        self.assertEqual((parsed['cvss_score'], parsed['severity']), (7.8, 'high'))
+        self.assertEqual(parsed['published_at'].isoformat(), '2024-10-08T00:00:00+00:00')
+
+    def test_falls_back_to_v40_when_there_is_no_v31(self):
+        parsed = nvd.parse_cve(nvd_item(metrics={'cvssMetricV40': [metric(9.3, 'CRITICAL')]}))
+        self.assertEqual((parsed['cvss_score'], parsed['severity']), (9.3, 'critical'))
+
+    def test_cve_without_score_is_kept_with_blank_severity(self):
+        parsed = nvd.parse_cve(nvd_item())
+        self.assertEqual((parsed['cvss_score'], parsed['severity']), (None, ''))
+
+    def test_unknown_severity_name_becomes_blank(self):
+        parsed = nvd.parse_cve(nvd_item(metrics={'cvssMetricV31': [metric(0.0, 'NONE')]}))
+        self.assertEqual(parsed['severity'], '')
+
+
+class NvdSaveAndCollectTests(APITestCase):
+    def test_save_creates_then_updates(self):
+        first = nvd.save_cves([nvd.parse_cve(nvd_item(description='old'))])
+        second = nvd.save_cves([nvd.parse_cve(nvd_item(description='new'))])
+        self.assertEqual((first, second), ((1, 0), (0, 1)))
+        self.assertEqual(CVE.objects.get(cve_id='CVE-2024-43572').description, 'new')
+
+    def test_collect_recent_saves_and_skips_broken_items(self):
+        items = [nvd_item('CVE-2026-0001'), {'cve': {'published': 'x'}}, nvd_item('CVE-2026-0002')]
+        with mock.patch('patchmgr.nvd.fetch_modified_since', return_value=iter(items)):
+            created, updated, skipped = nvd.collect_recent(hours=12)
+        self.assertEqual((created, updated, skipped), (2, 0, 1))
+
+    def test_fetch_follows_pages_until_total_is_reached(self):
+        pages = [
+            {'totalResults': 3, 'resultsPerPage': 2, 'vulnerabilities': [nvd_item('CVE-2026-0001'), nvd_item('CVE-2026-0002')]},
+            {'totalResults': 3, 'resultsPerPage': 1, 'vulnerabilities': [nvd_item('CVE-2026-0003')]},
+        ]
+        urls = []
+
+        def fake_get(url, api_key):
+            urls.append(url)
+            return pages[len(urls) - 1]
+
+        now = datetime(2026, 10, 2, tzinfo=timezone.utc)
+        with mock.patch('patchmgr.nvd._get', side_effect=fake_get), mock.patch('patchmgr.nvd.time.sleep'):
+            got = list(nvd.fetch_modified_since(now - timedelta(hours=1), now, api_key=None))
+        self.assertEqual(len(got), 3)
+        self.assertIn('startIndex=0', urls[0])
+        self.assertIn('startIndex=2', urls[1])
+
+    def test_error_message_never_contains_the_api_key(self):
+        failure = HTTPError('http://x', 403, 'forbidden', {}, None)
+        with mock.patch('patchmgr.nvd.request.urlopen', side_effect=failure), \
+                mock.patch('patchmgr.nvd.time.sleep'):
+            with self.assertRaises(nvd.NvdError) as caught:
+                nvd._get('http://x', 'SECRET-KEY-VALUE')
+        self.assertNotIn('SECRET-KEY-VALUE', str(caught.exception))
+        self.assertIn('403', str(caught.exception))
+
+    def test_beat_schedule_runs_the_fetch_task(self):
+        entry = settings.CELERY_BEAT_SCHEDULE['fetch-recent-cves']
+        self.assertEqual(entry['task'], 'patchmgr.tasks.fetch_recent_cves')
+        self.assertEqual(entry['task'], tasks.fetch_recent_cves.name)
+
+    def test_task_returns_counts(self):
+        with mock.patch('patchmgr.nvd.fetch_modified_since', return_value=iter([nvd_item('CVE-2026-0009')])):
+            result = tasks.fetch_recent_cves(hours=12)
+        self.assertEqual(result, {'created': 1, 'updated': 0, 'skipped': 0})
