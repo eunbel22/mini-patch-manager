@@ -1,3 +1,6 @@
+from io import StringIO
+
+from django.core.management import call_command
 from rest_framework.test import APITestCase
 
 from .models import (
@@ -96,3 +99,25 @@ class PolicyApiTests(ApiTestBase):
         created = self.client.post('/api/policies/', self._payload(), format='json').json()
         response = self.client.delete(f"/api/policies/{created['id']}/")
         self.assertEqual(response.status_code, 204)
+
+
+class SeedDemoTests(APITestCase):
+    def _counts(self):
+        return (
+            EndpointGroup.objects.count(),
+            Software.objects.count(),
+            Endpoint.objects.count(),
+            InstalledSoftware.objects.count(),
+        )
+
+    def test_seed_creates_expected_counts(self):
+        call_command('seed_demo', stdout=StringIO())
+        groups, software, endpoints, _ = self._counts()
+        self.assertEqual((groups, software, endpoints), (3, 20, 50))
+        self.assertEqual(Endpoint.objects.filter(group__name='테스트').count(), 5)
+
+    def test_seed_is_repeatable(self):
+        call_command('seed_demo', stdout=StringIO())
+        first = self._counts()
+        call_command('seed_demo', stdout=StringIO())
+        self.assertEqual(self._counts(), first)
