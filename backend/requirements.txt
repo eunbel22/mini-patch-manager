@@ -2,6 +2,7 @@ celery==5.6.3
 Django==6.1.1
 djangorestframework==3.18.1
 drf-spectacular==0.30.0
+packaging==26.3
 psycopg==3.3.6
 psycopg-binary==3.3.6
 python-dotenv==1.2.4

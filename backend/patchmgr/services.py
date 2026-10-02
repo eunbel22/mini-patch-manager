@@ -1,7 +1,12 @@
+from collections import defaultdict
+
 from django.db.models import Count
 from django.utils import timezone
 
-from .models import Endpoint, InstalledSoftware, Patch, PatchStatus, Software
+from .models import AffectedSoftware, Endpoint, InstalledSoftware, Patch, PatchStatus, Severity, Software
+from .versions import is_affected
+
+UNSCORED = 'unscored'  # 아직 위험도 점수가 없는 CVE
 
 
 def apply_agent_report(payload):
@@ -59,16 +64,68 @@ def apply_agent_report(payload):
             patch.save(update_fields=['is_error_reported'])
 
 
+def assess_vulnerabilities(endpoint=None):
+    """설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는지 판단한다. endpoint를 주면 그 PC만 본다.
+
+    (PC, CVE, 소프트웨어)마다 한 건을 돌려준다.
+      - status 'vulnerable': 영향 범위에 들어감
+      - status 'unknown': 버전을 읽지 못해 판단 불가 (취약으로 세지 않고 따로 센다)
+    같은 CVE에 범위가 여러 줄이면 하나라도 해당되면 vulnerable이다. 해당되지 않는 것은 돌려주지 않는다.
+    """
+    rows_by_software = defaultdict(list)
+    for row in AffectedSoftware.objects.select_related('cve'):
+        rows_by_software[row.software_id].append(row)
+
+    installed = InstalledSoftware.objects.select_related('software')
+    if endpoint is not None:
+        installed = installed.filter(endpoint=endpoint)
+
+    findings = {}
+    for item in installed:
+        for row in rows_by_software.get(item.software_id, []):
+            result = is_affected(item.version, row)
+            if result is False:
+                continue
+            key = (item.endpoint_id, row.cve_id, item.software_id)
+            status = 'vulnerable' if result else 'unknown'
+            if key in findings and findings[key]['status'] == 'vulnerable':
+                continue
+            findings[key] = {
+                'endpoint_id': item.endpoint_id,
+                'cve_id': row.cve.cve_id,
+                'severity': row.cve.severity or UNSCORED,
+                'cvss_score': row.cve.cvss_score,
+                'software': item.software.name,
+                'installed_version': item.version,
+                'status': status,
+            }
+    return list(findings.values())
+
+
 def dashboard_summary():
     """패치 적용 현황 요약. 패치율 = 적용된 수 / 전체 (PC와 패치 한 쌍이 한 건)"""
     counts = {status.value: 0 for status in PatchStatus.Status}
     for row in PatchStatus.objects.values('status').annotate(total=Count('id')):
         counts[row['status']] = row['total']
     total = sum(counts.values())
+
+    # 설치된 소프트웨어 버전 기준으로 취약한 PC 수 (위험도별). 한 PC가 여러 등급에 걸리면 각각 센다.
+    affected_endpoints = {severity: set() for severity in [*reversed(Severity.values), UNSCORED]}
+    unknown = 0
+    for finding in assess_vulnerabilities():
+        if finding['status'] == 'vulnerable':
+            affected_endpoints[finding['severity']].add(finding['endpoint_id'])
+        else:
+            unknown += 1
+
     return {
         'patch_rate': round(counts[PatchStatus.Status.APPLIED] / total, 4) if total else None,
         'total': total,
         'status_counts': counts,
         'endpoint_count': Endpoint.objects.count(),
         'reported_endpoint_count': Endpoint.objects.filter(last_reported_at__isnull=False).count(),
+        'software_vulnerable_endpoints_by_severity': {
+            severity: len(ids) for severity, ids in affected_endpoints.items()
+        },
+        'unknown_assessments': unknown,
     }

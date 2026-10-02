@@ -34,7 +34,7 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 | | `GET /api/cves/{id}` | CVE 상세 (CVSS, 영향 SW, 해결 KB) |
 | | `GET /api/patches/{id}` | 패치(KB) 상세 |
 | PC 목록 | `GET /api/endpoints` | PC 목록 (그룹, 패치 상태 필터) |
-| | `GET /api/endpoints/{id}` | PC 상세 (설치 SW, 패치 상태) |
+| | `GET /api/endpoints/{id}` | PC 상세 (설치 SW, 패치 상태, 취약점 판단 결과) |
 | | `GET /api/groups` | 그룹 목록 (필터와 정책 편집에서 그룹을 고르는 데 사용) |
 | 대시보드 | `GET /api/dashboard/summary` | 패치율, 위험도별 미적용 PC, 진행 중 배포 |
 | 정책 목록 · 편집 | `GET, POST /api/policies` | 정책 목록과 새로 만들기 |
@@ -65,7 +65,21 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 
 ### 대시보드 요약 (현재 범위)
 
-`GET /api/dashboard/summary/`는 패치율(적용 / 전체), 상태별 건수, 보고한 PC 수를 준다. 위험도별 미적용 PC와 진행 중인 배포는 Day 4에 더한다.
+`GET /api/dashboard/summary/`는 아래를 준다. 진행 중인 배포와 패치(KB) 기준의 위험도별 미적용 PC는 화면을 만들 때 더한다.
+
+- 패치율(적용 / 전체), 상태별 건수, 보고한 PC 수
+- `software_vulnerable_endpoints_by_severity`: 설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는 PC 수를 위험도(critical · high · medium · low · unscored)별로 센 값. 한 PC가 여러 등급에 걸리면 각각 센다
+- `unknown_assessments`: 버전을 읽지 못해 판단하지 못한 건수 (취약으로 세지 않는다)
+
+### 버전 비교 규칙
+
+PC에 설치된 버전이 `AffectedSoftware` 한 줄의 범위에 들어가는지 판단하는 규칙이다 (`patchmgr/versions.py`).
+
+- 버전은 숫자로 풀어서 비교한다(`9.0` < `10.0`). 표준 도구 `packaging`을 쓰고, 읽지 못하는 Java식 `8u421`만 `8.0.421`로 바꿔서 읽는다.
+- 범위 칸은 이상 · 초과 · 이하 · 미만 · 정확히 다섯 가지이고, 모두 비어 있으면 모든 버전이 해당된다.
+- 결과는 해당됨 / 해당되지 않음 / 판단 불가 세 가지다. 설치 버전이나 범위의 버전을 읽지 못하면 판단 불가로 따로 표시하고 취약으로 세지 않는다. 읽을 수 있는 조건 중 하나라도 어긋나면 나머지를 읽지 못해도 해당되지 않는다.
+- 같은 CVE에 범위가 여러 줄이면 하나라도 해당되면 취약이다.
+- 한계: Oracle Java는 NVD가 `1.8.0` + `update421` 식으로 적는 경우가 있어 `8u421`과 맞지 않을 수 있다. [미확인]
 
 ## 4. ERD
 
