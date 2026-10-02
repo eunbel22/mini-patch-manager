@@ -54,11 +54,18 @@ INSTALLED_APPS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    # 목록은 50개씩 나눠서 준다 (응답: count, next, previous, results)
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
 }
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'mini-patch-manager API',
     'VERSION': '0.1.0',
+    # CVE와 Policy가 같은 등급 선택지(Severity)를 쓰므로 이름을 하나로 맞춘다
+    'ENUM_NAME_OVERRIDES': {
+        'SeverityEnum': 'patchmgr.models.Severity.choices',
+    },
 }
 
 MIDDLEWARE = [
