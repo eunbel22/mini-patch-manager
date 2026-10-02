@@ -122,6 +122,31 @@ class PatchSerializer(serializers.ModelSerializer):
         ]
 
 
+class SearchCVESerializer(serializers.ModelSerializer):
+    description = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CVE
+        fields = ['id', 'cve_id', 'severity', 'cvss_score', 'published_at', 'description']
+
+    def get_description(self, obj) -> str:
+        # 목록에서는 앞부분만 보여 준다
+        return obj.description[:200]
+
+
+class SearchPatchSerializer(serializers.ModelSerializer):
+    cve_count = serializers.IntegerField()
+
+    class Meta:
+        model = Patch
+        fields = ['id', 'kb_number', 'target_os', 'fixed_build', 'release_date', 'cve_count']
+
+
+class SearchResultSerializer(serializers.Serializer):
+    cves = SearchCVESerializer(many=True)
+    patches = SearchPatchSerializer(many=True)
+
+
 class PolicyStageSerializer(serializers.ModelSerializer):
     class Meta:
         model = PolicyStage

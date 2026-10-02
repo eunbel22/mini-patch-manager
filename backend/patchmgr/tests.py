@@ -458,6 +458,61 @@ class VersionCompareTests(APITestCase):
         self.assertIs(versions.is_affected('1.0', row), False)  # 시작 조건에서 이미 어긋남
 
 
+class SearchApiTests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.log4j = CVE.objects.create(cve_id='CVE-2021-44228', cvss_score='10.0', severity='critical',
+                                       description='Apache Log4j2 JNDI features do not protect against attacker controlled LDAP')
+        cls.mmc = CVE.objects.create(cve_id='CVE-2024-43572', cvss_score='7.8', severity='high',
+                                     description='Microsoft Management Console Remote Code Execution Vulnerability')
+        cls.unscored = CVE.objects.create(cve_id='CVE-2026-0001', description='A new WordPress plugin issue')
+        cls.win10 = Patch.objects.create(kb_number='KB5044273', target_os='Windows 10 22H2', fixed_build='10.0.19045.5011')
+        cls.win11 = Patch.objects.create(kb_number='KB5044285', target_os='Windows 11 23H2')
+        cls.win10.cves.add(cls.mmc)
+        cls.win11.cves.add(cls.mmc)
+
+    def _search(self, q):
+        response = self.client.get('/api/search/', {'q': q})
+        return response, response.json()
+
+    def test_finds_cve_by_number_ignoring_case(self):
+        _, body = self._search('cve-2021-44228')
+        self.assertEqual([c['cve_id'] for c in body['cves']], ['CVE-2021-44228'])
+        self.assertEqual(body['patches'], [])
+
+    def test_finds_cve_by_description_and_orders_by_score(self):
+        _, body = self._search('vulnerability')
+        self.assertEqual([c['cve_id'] for c in body['cves']], ['CVE-2024-43572'])
+        _, body = self._search('CVE-202')
+        self.assertEqual([c['cve_id'] for c in body['cves']],
+                         ['CVE-2021-44228', 'CVE-2024-43572', 'CVE-2026-0001'])  # 점수 높은 순, 점수 없는 CVE는 마지막
+
+    def test_finds_patch_by_kb_with_or_without_prefix(self):
+        for q in ('KB5044273', 'kb5044273', '5044273'):
+            _, body = self._search(q)
+            self.assertEqual([p['kb_number'] for p in body['patches']], ['KB5044273'], q)
+        _, body = self._search('KB50442')
+        self.assertEqual(sorted(p['kb_number'] for p in body['patches']), ['KB5044273', 'KB5044285'])
+
+    def test_cve_number_also_returns_the_patches_that_fix_it(self):
+        _, body = self._search('CVE-2024-43572')
+        self.assertEqual(sorted(p['kb_number'] for p in body['patches']), ['KB5044273', 'KB5044285'])
+        self.assertEqual(body['patches'][0]['cve_count'], 1)
+
+    def test_description_is_cut_to_200_characters(self):
+        CVE.objects.create(cve_id='CVE-2026-0002', description='x' * 500)
+        _, body = self._search('CVE-2026-0002')
+        self.assertEqual(len(body['cves'][0]['description']), 200)
+
+    def test_missing_or_too_short_query_is_rejected(self):
+        for params in ({}, {'q': ''}, {'q': ' a '}):
+            self.assertEqual(self.client.get('/api/search/', params).status_code, 400, params)
+
+    def test_no_match_returns_empty_lists(self):
+        response, body = self._search('no-such-thing')
+        self.assertEqual((response.status_code, body), (200, {'cves': [], 'patches': []}))
+
+
 class VulnerabilityAssessmentTests(APITestCase):
     @classmethod
     def setUpTestData(cls):
