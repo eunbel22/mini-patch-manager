@@ -1,4 +1,5 @@
-from drf_spectacular.utils import OpenApiResponse, extend_schema
+from django.db.models import Count, F, Q
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -14,6 +15,7 @@ from .serializers import (
     EndpointSerializer,
     PatchSerializer,
     PolicySerializer,
+    SearchResultSerializer,
 )
 
 
@@ -82,6 +84,35 @@ class AgentReportView(APIView):
             return Response({'detail': '등록되지 않은 PC입니다.'}, status=status.HTTP_404_NOT_FOUND)
         process_agent_report.delay(payload)
         return Response({'status': 'accepted'}, status=status.HTTP_202_ACCEPTED)
+
+
+class SearchView(APIView):
+    """CVE · KB 통합 검색. CVE 번호, KB 번호, CVE 설명의 일부로 찾는다."""
+
+    LIMIT = 20  # 종류별로 최대 몇 건까지 보여 줄지
+
+    @extend_schema(
+        parameters=[OpenApiParameter('q', str, required=True, description='CVE 번호, KB 번호(숫자만도 가능) 또는 설명의 일부. 2글자 이상')],
+        responses={200: SearchResultSerializer, 400: OpenApiResponse(description='검색어가 없거나 너무 짧음')},
+    )
+    def get(self, request):
+        q = request.query_params.get('q', '').strip()
+        if len(q) < 2:
+            return Response({'detail': '검색어(q)는 2글자 이상이어야 합니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cves = (
+            CVE.objects.filter(Q(cve_id__icontains=q) | Q(description__icontains=q))
+            .order_by(F('cvss_score').desc(nulls_last=True), '-published_at')[:self.LIMIT]
+        )
+        # KB 번호는 숫자만 입력해도 찾는다 (5044273 -> KB5044273). CVE 번호로 그 CVE를 고치는 KB도 찾는다.
+        kb = f'KB{q}' if q.isdigit() else q
+        patches = (
+            Patch.objects.filter(Q(kb_number__icontains=kb) | Q(cves__cve_id__icontains=q))
+            .distinct()
+            .annotate(cve_count=Count('cves', distinct=True))
+            .order_by(F('release_date').desc(nulls_last=True), 'kb_number')[:self.LIMIT]
+        )
+        return Response(SearchResultSerializer({'cves': cves, 'patches': patches}).data)
 
 
 class DashboardSummaryView(APIView):

@@ -30,7 +30,7 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 | 화면 · 기능 | API | 하는 일 |
 | --- | --- | --- |
 | 에이전트 보고 | `POST /api/agents/report` | PC가 설치 SW와 적용 KB를 보고. 즉시 응답하고 처리는 Celery |
-| CVE · KB 검색 | `GET /api/search?q=` | CVE 번호나 KB 번호로 통합 검색 |
+| CVE · KB 검색 | `GET /api/search/?q=` | CVE 번호, KB 번호(숫자만도 가능), CVE 설명의 일부로 통합 검색. 2글자 미만이면 400. CVE 번호로 찾으면 그 CVE를 고치는 KB도 함께 준다. 종류별로 최대 20건 |
 | | `GET /api/cves/{id}` | CVE 상세 (CVSS, 영향 SW, 해결 KB) |
 | | `GET /api/patches/{id}` | 패치(KB) 상세 |
 | PC 목록 | `GET /api/endpoints` | PC 목록 (그룹, 패치 상태 필터) |
