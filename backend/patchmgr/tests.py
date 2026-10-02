@@ -12,6 +12,8 @@ from config.celery import app as celery_app
 from . import nvd, tasks
 from .models import (
     CVE,
+    AffectedSoftware,
+    SoftwareCpe,
     Endpoint,
     EndpointGroup,
     InstalledSoftware,
@@ -266,8 +268,8 @@ class NvdSaveAndCollectTests(APITestCase):
     def test_collect_recent_saves_and_skips_broken_items(self):
         items = [nvd_item('CVE-2026-0001'), {'cve': {'published': 'x'}}, nvd_item('CVE-2026-0002')]
         with mock.patch('patchmgr.nvd.fetch_modified_since', return_value=iter(items)):
-            created, updated, skipped = nvd.collect_recent(hours=12)
-        self.assertEqual((created, updated, skipped), (2, 0, 1))
+            result = nvd.collect_recent(hours=12)
+        self.assertEqual(result, {'created': 2, 'updated': 0, 'skipped': 1, 'affected': 0})
 
     def test_fetch_follows_pages_until_total_is_reached(self):
         pages = [
@@ -304,4 +306,97 @@ class NvdSaveAndCollectTests(APITestCase):
     def test_task_returns_counts(self):
         with mock.patch('patchmgr.nvd.fetch_modified_since', return_value=iter([nvd_item('CVE-2026-0009')])):
             result = tasks.fetch_recent_cves(hours=12)
-        self.assertEqual(result, {'created': 1, 'updated': 0, 'skipped': 0})
+        self.assertEqual(result, {'created': 1, 'updated': 0, 'skipped': 0, 'affected': 0})
+
+
+def with_config(item, *matches):
+    """nvd_item에 영향 소프트웨어(CPE) 조건을 붙인다."""
+    item['cve']['configurations'] = [{'nodes': [{'operator': 'OR', 'negate': False, 'cpeMatch': list(matches)}]}]
+    return item
+
+
+def cpe(criteria, vulnerable=True, **bounds):
+    return {'vulnerable': vulnerable, 'criteria': criteria, 'matchCriteriaId': 'X', **bounds}
+
+
+class NvdAffectedTests(APITestCase):
+    def test_parse_affected_reads_ranges_and_unescapes_names(self):
+        item = with_config(
+            nvd_item(),
+            cpe('cpe:2.3:a:notepad-plus-plus:notepad\\+\\+:*:*:*:*:*:*:*:*', versionEndExcluding='8.6.5'),
+            cpe('cpe:2.3:a:google:chrome:*:*:*:*:*:*:*:*', versionStartIncluding='100.0', versionEndIncluding='120.0'),
+            cpe('cpe:2.3:a:apache:log4j:2.0:beta9:*:*:*:*:*:*'),
+            cpe('cpe:2.3:o:microsoft:windows:-:*:*:*:*:*:*:*', vulnerable=False),  # 조건일 뿐이라 제외
+            cpe('cpe:2.3:o:microsoft:windows:*:*:*:*:*:*:*:*'),  # 운영체제라 제외
+        )
+        found = nvd.parse_affected(item)
+        self.assertEqual(len(found), 3)
+        notepad, chrome, log4j = found
+        self.assertEqual((notepad['vendor'], notepad['product'], notepad['version_end_excluding']),
+                         ('notepad-plus-plus', 'notepad++', '8.6.5'))
+        self.assertEqual((chrome['version_start_including'], chrome['version_end_including']), ('100.0', '120.0'))
+        self.assertEqual((log4j['version_exact'], log4j['version_end_excluding']), ('2.0', ''))
+
+    def test_parse_affected_removes_duplicates_and_handles_missing_configuration(self):
+        same = cpe('cpe:2.3:a:google:chrome:*:*:*:*:*:*:*:*', versionEndExcluding='1.0')
+        self.assertEqual(len(nvd.parse_affected(with_config(nvd_item(), same, dict(same)))), 1)
+        self.assertEqual(nvd.parse_affected(nvd_item()), [])
+
+    def _software(self):
+        adobe = Software.objects.create(name='Adobe Acrobat Reader', vendor='Adobe')
+        SoftwareCpe.objects.create(software=adobe, vendor='adobe', product='acrobat_reader')
+        SoftwareCpe.objects.create(software=adobe, vendor='adobe', product='acrobat_reader_dc')
+        return adobe
+
+    def test_only_mapped_software_is_saved_and_duplicates_are_merged(self):
+        adobe = self._software()
+        item = with_config(
+            nvd_item('CVE-2024-41869'),
+            cpe('cpe:2.3:a:adobe:acrobat_reader:*:*:*:*:*:*:*:*', versionEndExcluding='24.001'),
+            cpe('cpe:2.3:a:adobe:acrobat_reader_dc:*:*:*:*:*:*:*:*', versionEndExcluding='24.001'),
+            cpe('cpe:2.3:a:unknown_vendor:unknown_product:*:*:*:*:*:*:*:*'),  # 우리 소프트웨어에 없음
+        )
+        with mock.patch('patchmgr.nvd.fetch_by_ids', return_value=iter([item])):
+            result = nvd.collect_ids(['CVE-2024-41869'])
+        self.assertEqual(result['affected'], 1)
+        row = AffectedSoftware.objects.get()
+        self.assertEqual((row.software, row.version_end_excluding), (adobe, '24.001'))
+
+    def test_rerun_replaces_the_previous_rows_of_the_cve(self):
+        self._software()
+        first = with_config(nvd_item('CVE-2024-41869'),
+                            cpe('cpe:2.3:a:adobe:acrobat_reader:*:*:*:*:*:*:*:*', versionEndExcluding='24.001'))
+        second = with_config(nvd_item('CVE-2024-41869'),
+                             cpe('cpe:2.3:a:adobe:acrobat_reader:*:*:*:*:*:*:*:*', versionEndExcluding='24.002'))
+        for item in (first, second):
+            with mock.patch('patchmgr.nvd.fetch_by_ids', return_value=iter([item])):
+                nvd.collect_ids(['CVE-2024-41869'])
+        self.assertEqual(list(AffectedSoftware.objects.values_list('version_end_excluding', flat=True)), ['24.002'])
+
+    def test_cve_detail_api_shows_affected_software_with_ranges(self):
+        self._software()
+        item = with_config(nvd_item('CVE-2024-41869'),
+                           cpe('cpe:2.3:a:adobe:acrobat_reader:*:*:*:*:*:*:*:*', versionEndExcluding='24.001'))
+        with mock.patch('patchmgr.nvd.fetch_by_ids', return_value=iter([item])):
+            nvd.collect_ids(['CVE-2024-41869'])
+        cve = CVE.objects.get(cve_id='CVE-2024-41869')
+        body = self.client.get(f'/api/cves/{cve.id}/').json()
+        self.assertEqual(body['affected_software'][0]['name'], 'Adobe Acrobat Reader')
+        self.assertEqual(body['affected_software'][0]['version_end_excluding'], '24.001')
+
+
+class SeedCpeMappingsTests(APITestCase):
+    def test_maps_multiple_names_skips_missing_and_is_repeatable(self):
+        adobe = Software.objects.create(name='Adobe Acrobat Reader', vendor='Adobe')
+        notepad = Software.objects.create(name='Notepad++', vendor='Notepad++ Team')
+        Software.objects.create(name='Slack', vendor='Slack')
+        for _ in range(2):
+            call_command('seed_cpe_mappings', stdout=StringIO())
+        self.assertEqual(adobe.cpes.count(), 2)
+        self.assertEqual(sorted(notepad.cpes.values_list('vendor', flat=True)),
+                         ['don_ho', 'notepad-plus-plus', 'notepad_plus_plus'])
+        self.assertEqual(SoftwareCpe.objects.filter(software__name='Slack').count(), 0)  # 매핑 없음으로 둔다
+
+    def test_seed_demo_also_creates_mappings(self):
+        call_command('seed_demo', stdout=StringIO())
+        self.assertEqual(Software.objects.get(name='Google Chrome').cpes.get().product, 'chrome')

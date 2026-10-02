@@ -74,6 +74,7 @@ erDiagram
     EndpointGroup ||--o{ Endpoint : contains
     Endpoint ||--o{ InstalledSoftware : has
     Software ||--o{ InstalledSoftware : installed_as
+    Software ||--o{ SoftwareCpe : named_in_nvd_as
     CVE ||--o{ AffectedSoftware : affects
     Software ||--o{ AffectedSoftware : affected_by
     Patch }o--o{ CVE : fixes
@@ -93,7 +94,8 @@ erDiagram
 | Software | name, vendor | 소프트웨어 종류 |
 | InstalledSoftware | endpoint, software, version | PC에 설치된 SW와 버전. (endpoint, software)는 한 줄 |
 | CVE | cve_id, description, cvss_score, severity, published_at | NVD에서 수집. severity는 CVSS 3.1 등급(Low · Medium · High · Critical) |
-| AffectedSoftware | cve, software, version_start, version_end_excluding | 어느 SW의 어느 버전이 영향받는지 (NVD의 CPE 범위). 계획에 없던 연결표 |
+| SoftwareCpe | software, vendor, product | 우리 소프트웨어와 NVD의 제조사:제품 이름(CPE)을 잇는 매핑. 소프트웨어 하나에 NVD 이름이 여러 개일 수 있어(Adobe Reader 2개, Notepad++ 제조사 3개, 한컴오피스는 버전마다 제품이 따로) 칸이 아니라 표로 둔다. 계획에 없던 표 |
+| AffectedSoftware | cve, software, version_start_including, version_start_excluding, version_end_including, version_end_excluding, version_exact | 어느 SW의 어느 버전이 영향받는지. NVD의 버전 범위 네 가지(이상 · 초과 · 이하 · 미만)와 특정 버전 하나를 그대로 담는다. 모두 비면 모든 버전이 해당. CVE를 수집할 때 SoftwareCpe로 우리 소프트웨어와 이어지는 것만 저장한다. 계획에 없던 연결표 |
 | Patch | kb_number, title, target_os, fixed_build, release_date, download_url, is_error_reported | KB 하나. 같은 CVE라도 Windows 종류마다 KB가 다르므로 target_os를 둔다. is_error_reported는 오류 보고 패치 분류용 |
 | Patch ↔ CVE | (다대다) | KB 하나가 여러 CVE를 고치고, CVE 하나를 여러 KB가 고친다 |
 | PatchStatus | endpoint, patch, status, error_code, reported_at | PC와 패치 한 쌍당 한 줄. status는 미적용 · 적용 · 오류 · 롤백. (endpoint, patch)는 한 줄 |
@@ -102,3 +104,5 @@ erDiagram
 | Deployment | policy, patch, current_stage, state, started_at, finished_at | 정책을 패치 하나에 실제로 실행한 기록. state는 진행 중 · 완료 · 롤백됨. 계획에 없던 표 |
 
 범위 결정: 정책의 배포 단계는 별도 표(PolicyStage)로 나눠 N단계까지 허용한다.
+
+범위 결정: CVE와 소프트웨어는 `SoftwareCpe` 매핑 표로 잇는다. NVD CPE API에서 직접 조회해 확인한 이름만 매핑하며, Slack(NVD에서 데스크톱 제품을 찾지 못함)과 AhnLab V3(같은 제품인지 확인하지 못함)는 매핑 없이 둔다. 표는 모두 12개다.

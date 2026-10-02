@@ -1,5 +1,6 @@
 import random
 
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -75,6 +76,9 @@ class Command(BaseCommand):
                         software=item,
                         defaults={'version': rng.choice(versions[item.name])},
                     )
+
+        # 소프트웨어를 NVD 이름과 잇는 매핑도 함께 넣는다
+        call_command('seed_cpe_mappings', stdout=self.stdout)
 
         self.stdout.write(self.style.SUCCESS(
             f'그룹 {EndpointGroup.objects.count()}개, 소프트웨어 {Software.objects.count()}종, '
