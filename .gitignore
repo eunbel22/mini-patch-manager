@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 개인 준비 기록 (GitHub에 올리지 않음)
+file/

@@ -1,0 +1,11 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: patch
+      POSTGRES_USER: patch
+      POSTGRES_PASSWORD: patch
+    ports: ["5432:5432"]
+  mq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]
