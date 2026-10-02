@@ -6,6 +6,7 @@ admin.site.register([
     models.EndpointGroup,
     models.Endpoint,
     models.Software,
+    models.SoftwareCpe,
     models.InstalledSoftware,
     models.CVE,
     models.AffectedSoftware,

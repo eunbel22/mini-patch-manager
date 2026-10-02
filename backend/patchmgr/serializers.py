@@ -60,7 +60,10 @@ class AffectedSoftwareSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AffectedSoftware
-        fields = ['id', 'name', 'vendor', 'version_start', 'version_end_excluding']
+        fields = [
+            'id', 'name', 'vendor', 'version_start_including', 'version_start_excluding',
+            'version_end_including', 'version_end_excluding', 'version_exact',
+        ]
 
 
 class PatchSummarySerializer(serializers.ModelSerializer):

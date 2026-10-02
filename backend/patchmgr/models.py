@@ -64,6 +64,27 @@ class InstalledSoftware(models.Model):
         return f'{self.endpoint} - {self.software} {self.version}'
 
 
+class SoftwareCpe(models.Model):
+    """우리 소프트웨어와 NVD의 제조사:제품 이름(CPE)을 잇는 매핑.
+
+    소프트웨어 하나에 NVD 이름이 여러 개일 수 있어서(예: Adobe Reader는 acrobat_reader와
+    acrobat_reader_dc, Notepad++는 제조사 이름이 세 가지) 칸이 아니라 표로 둔다.
+    vendor와 product는 CPE 표기에서 역슬래시를 뺀 소문자 값이다 (예: notepad-plus-plus, notepad++).
+    """
+
+    software = models.ForeignKey(Software, on_delete=models.CASCADE, related_name='cpes')
+    vendor = models.CharField(max_length=100)
+    product = models.CharField(max_length=100)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['software', 'vendor', 'product'], name='uniq_softwarecpe'),
+        ]
+
+    def __str__(self):
+        return f'{self.software} = {self.vendor}:{self.product}'
+
+
 class CVE(models.Model):
     """NVD에서 수집한 취약점"""
 
@@ -78,12 +99,19 @@ class CVE(models.Model):
 
 
 class AffectedSoftware(models.Model):
-    """CVE가 영향을 주는 소프트웨어와 버전 범위 (NVD의 CPE 범위)"""
+    """CVE가 영향을 주는 소프트웨어와 버전 범위 (NVD의 CPE 범위).
+
+    범위 칸은 NVD와 같은 네 가지(이상 · 초과 · 이하 · 미만)이고, 범위 없이 특정 버전 하나만 지정된 경우는
+    version_exact에 둔다. 비어 있는 칸은 그 조건이 없다는 뜻이다. 모두 비어 있으면 모든 버전이 해당된다.
+    """
 
     cve = models.ForeignKey(CVE, on_delete=models.CASCADE, related_name='affected_software')
     software = models.ForeignKey(Software, on_delete=models.CASCADE, related_name='affected_by')
-    version_start = models.CharField(max_length=100, blank=True)
+    version_start_including = models.CharField(max_length=100, blank=True)
+    version_start_excluding = models.CharField(max_length=100, blank=True)
+    version_end_including = models.CharField(max_length=100, blank=True)
     version_end_excluding = models.CharField(max_length=100, blank=True)
+    version_exact = models.CharField(max_length=100, blank=True)
 
     def __str__(self):
         return f'{self.cve} -> {self.software}'

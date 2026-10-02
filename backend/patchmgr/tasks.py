@@ -13,8 +13,7 @@ def ping():
 @shared_task
 def fetch_recent_cves(hours=24):
     """NVD에서 최근 hours시간 안에 바뀐 CVE를 가져와 저장한다. Celery Beat가 주기적으로 실행한다."""
-    created, updated, skipped = collect_recent(hours=hours)
-    return {'created': created, 'updated': updated, 'skipped': skipped}
+    return collect_recent(hours=hours)
 
 
 @shared_task
