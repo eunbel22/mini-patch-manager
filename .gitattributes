@@ -1,0 +1,5 @@
+# 리눅스 컨테이너에서 읽는 설정 파일은 윈도우에서 내려받아도 줄바꿈을 LF로 유지한다.
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+docker-compose.yml text eol=lf
+*.conf text eol=lf

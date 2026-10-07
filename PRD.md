@@ -75,6 +75,21 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 - `software_vulnerable_endpoints_by_severity`: 설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는 PC 수를 위험도(critical · high · medium · low · unscored)별로 센 값. 한 PC가 여러 등급에 걸리면 각각 센다
 - `unknown_assessments`: 버전을 읽지 못해 판단하지 못한 건수 (취약으로 세지 않는다)
 
+### 실행 환경 (Docker Compose)
+
+`docker compose up --build` 한 줄로 전체가 뜬다. 정한 것은 `file/README.md`의 「정한 것」 표에 까닭과 함께 있다.
+
+| 서비스 | 하는 일 |
+| --- | --- |
+| `db` | PostgreSQL 16 (이름 있는 볼륨 `pgdata`로 데이터 유지) |
+| `mq` | RabbitMQ (관리 화면 15672) |
+| `init` | **한 번만 실행되고 끝난다**: 마이그레이션 + (`SEED_DEMO=1`이면) 시연 데이터 + 시연용 실제 CVE 5개 가져오기(실패해도 계속). 나머지 서비스는 이것이 성공한 뒤에 시작한다 |
+| `backend` | gunicorn(워커 3개). 정적 파일(관리자 화면)은 whitenoise가 서비스한다 |
+| `worker`, `beat` | Celery 워커(Linux 기본 방식), Celery Beat |
+| `frontend` | Nginx. React 빌드 결과를 서비스하고 `/api`, `/admin`, `/static`은 백엔드로 넘긴다. 주소가 하나(8080)라 CORS 설정이 필요 없다 |
+
+백엔드 이미지는 Rocky Linux 9 + Python 3.12, 일반 사용자(uid 10001)로 실행한다. 비밀 값(NVD 키)은 이미지나 compose 파일에 넣지 않고 `.env`에서 읽는다. 설정은 환경 변수(`DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `POSTGRES_HOST`, `CELERY_BROKER_URL` 등)로 바꾼다.
+
 ### 배포 규칙 (정책에 따른 동작)
 
 `patchmgr/deployment.py`가 맡는다. 정한 것은 `file/README.md`의 「정한 것」 표에 까닭과 함께 있다.

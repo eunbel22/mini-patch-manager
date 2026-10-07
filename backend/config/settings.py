@@ -36,7 +36,8 @@ SECRET_KEY = os.environ.get(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
-ALLOWED_HOSTS = []
+# DEBUG가 꺼진 배포 환경(컨테이너)에서는 접속을 허용할 주소를 쉼표로 적어 준다. 예: localhost,127.0.0.1
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',') if host.strip()]
 
 
 # Application definition
@@ -91,6 +92,8 @@ SPECTACULAR_SETTINGS = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # 컨테이너에서 gunicorn으로 돌 때 관리자 화면의 정적 파일(CSS · JS)을 Django가 직접 내준다
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -170,6 +173,13 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+# collectstatic이 정적 파일을 모아 두는 곳 (이미지를 만들 때 한 번 실행한다)
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    # 압축본(.gz)을 함께 만든다. 이름에 해시를 붙이는 방식은 쓰지 않아서 collectstatic 없이도 개발 서버가 그대로 돈다.
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'},
+}
 
 
 # Email

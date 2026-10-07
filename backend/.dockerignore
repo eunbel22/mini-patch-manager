@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+staticfiles/
+celerybeat-schedule*
+celerybeat.pid
+.env
+.env.*
+.git/
+.gitignore
+*.sqlite3
+Dockerfile
+.dockerignore
