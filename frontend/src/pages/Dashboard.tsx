@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useApi } from '../api'
 import type { DashboardSummary } from '../api'
 import { useTooltip } from '../components/Tooltip'
@@ -77,6 +78,12 @@ function Summary({ data }: { data: DashboardSummary }) {
           {data.unknown_assessments.toLocaleString()}건
         </div>
         <div className="kpi-label">판단 불가 (설치된 버전을 읽지 못해 취약 여부를 알 수 없는 건, 취약으로 세지 않음)</div>
+        <div className="kpi-value" style={{ marginTop: 14 }}>
+          {data.running_deployments.toLocaleString()}건
+        </div>
+        <div className="kpi-label">
+          진행 중인 배포 (<Link to="/policies">정책</Link>에서 시작하고 진행 상태를 봅니다)
+        </div>
       </section>
 
       <section className="card span-12" aria-labelledby="status-title">

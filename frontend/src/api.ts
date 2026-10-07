@@ -13,6 +13,7 @@ export interface DashboardSummary {
   reported_endpoint_count: number
   software_vulnerable_endpoints_by_severity: Record<SeverityKey, number>
   unknown_assessments: number
+  running_deployments: number
 }
 
 export interface CveHit {
@@ -164,6 +165,49 @@ export interface Policy {
 
 export type PolicyInput = Omit<Policy, 'id' | 'stages'> & { stages: Omit<PolicyStage, 'id'>[] }
 
+export type StageState = 'done' | 'active' | 'waiting' | 'failed' | 'upcoming'
+export type DeploymentState = 'running' | 'completed' | 'rolled_back'
+
+/** 배포 한 건의 단계 하나: 대상 PC 수와 상태별 수, 오류율 */
+export interface StageProgress {
+  order: number
+  group: number
+  group_name: string
+  delay_minutes: number
+  rollback_error_rate: number // 0.0 ~ 1.0
+  state: StageState
+  target_count: number
+  applied: number
+  error: number
+  pending: number
+  rolled_back: number
+  error_rate: number // 0.0 ~ 1.0
+}
+
+export interface DeploymentStatus {
+  id: number
+  policy: number
+  patch: { id: number; kb_number: string; target_os: string }
+  state: DeploymentState
+  current_stage_order: number | null
+  stage_ready_at: string | null
+  started_at: string
+  finished_at: string | null
+  note: string
+  stages: StageProgress[]
+}
+
+/** 배포할 패치를 고르는 목록의 한 줄 */
+export interface PatchOption {
+  id: number
+  kb_number: string
+  target_os: string
+  fixed_build: string
+  release_date: string | null
+  is_error_reported: boolean
+  max_severity: string
+}
+
 // ---- 요청 ----
 
 export class ApiError extends Error {
@@ -239,6 +283,37 @@ export interface ApiState<T> {
   data: T | null
   error: string | null
   loading: boolean
+}
+
+/** 일정한 간격으로 다시 불러온다. 새로 불러오는 동안에도 이전 값을 그대로 보여 줘서 화면이 깜빡이지 않는다. */
+export function usePolling<T>(url: string, intervalMs: number): ApiState<T> & { reload: () => void } {
+  const [settled, setSettled] = useState<{ url: string; data: T | null; error: string | null } | null>(null)
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    getJson<T>(url, controller.signal)
+      .then((data) => setSettled({ url, data, error: null }))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        const message = error instanceof Error ? error.message : '알 수 없는 오류'
+        setSettled((previous) => ({ url, data: previous && previous.url === url ? previous.data : null, error: message }))
+      })
+    return () => controller.abort()
+  }, [url, tick])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((value) => value + 1), intervalMs)
+    return () => window.clearInterval(timer)
+  }, [intervalMs])
+
+  const current = settled && settled.url === url ? settled : null
+  return {
+    data: current?.data ?? null,
+    error: current?.error ?? null,
+    loading: current === null,
+    reload: () => setTick((value) => value + 1),
+  }
 }
 
 interface Settled<T> {

@@ -212,7 +212,19 @@ class Deployment(models.Model):
     )
     state = models.CharField(max_length=20, choices=State.choices, default=State.RUNNING)
     started_at = models.DateTimeField(auto_now_add=True)
+    # 현재 단계에 들어간 시각. 그 단계의 delay_minutes가 지나야 이 단계의 PC들에게 설치 지시가 나간다.
+    stage_started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    # 롤백된 까닭 (예: "1단계 오류율 20%가 롤백 기준 10%를 넘어 롤백했습니다.")
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        constraints = [
+            # 한 패치에는 진행 중인 배포가 하나만 있을 수 있다 (정책이 달라도 마찬가지)
+            models.UniqueConstraint(
+                fields=['patch'], condition=models.Q(state='running'), name='uniq_running_deployment_per_patch',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.policy} -> {self.patch}: {self.state}'

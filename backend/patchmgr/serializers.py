@@ -3,9 +3,11 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
+from .deployment import SEVERITY_RANK
 from .models import (
     CVE,
     AffectedSoftware,
+    Deployment,
     Endpoint,
     EndpointGroup,
     InstalledSoftware,
@@ -146,6 +148,21 @@ class PatchSerializer(serializers.ModelSerializer):
         ]
 
 
+class PatchListSerializer(serializers.ModelSerializer):
+    """패치 목록의 한 줄 (배포할 패치를 고르는 데 쓴다)"""
+
+    max_severity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Patch
+        fields = ['id', 'kb_number', 'target_os', 'fixed_build', 'release_date', 'is_error_reported', 'max_severity']
+
+    def get_max_severity(self, obj) -> str:
+        """이 패치가 해결하는 CVE 중 가장 높은 위험도 (없으면 빈 문자열)"""
+        best = max(obj.cves.all(), key=lambda cve: SEVERITY_RANK.get(cve.severity, 0), default=None)
+        return best.severity if best else ''
+
+
 class SearchCVESerializer(serializers.ModelSerializer):
     description = serializers.SerializerMethodField()
 
@@ -205,15 +222,82 @@ class PolicySerializer(serializers.ModelSerializer):
     @transaction.atomic
     def update(self, instance, validated_data):
         stages = validated_data.pop('stages', None)
+        if stages is not None and instance.deployments.filter(state=Deployment.State.RUNNING).exists():
+            # 단계를 통째로 바꾸면 진행 중인 배포의 현재 단계가 사라진다
+            raise serializers.ValidationError({'stages': '진행 중인 배포가 있어 배포 단계를 바꿀 수 없습니다. 배포가 끝난 뒤에 바꾸세요.'})
         for field, value in validated_data.items():
             setattr(instance, field, value)
         instance.save()
         if stages is not None:
-            # 단계를 통째로 바꾼다. 진행 중인 배포의 current_stage는 비워진다(SET_NULL).
-            # 배포 로직을 만들 때(Day 8) 진행 중인 배포가 있으면 수정을 막을지 정한다.
+            # 단계를 통째로 바꾼다. 끝난 배포(완료 · 롤백)의 current_stage는 비워진다(SET_NULL).
+            # 진행 중인 배포가 있으면 위에서 막는다.
             instance.stages.all().delete()
             PolicyStage.objects.bulk_create(PolicyStage(policy=instance, **stage) for stage in stages)
         return instance
+
+
+class DeployRequestSerializer(serializers.Serializer):
+    patch = serializers.PrimaryKeyRelatedField(queryset=Patch.objects.all(), error_messages={
+        'does_not_exist': '그런 패치가 없습니다.',
+        'required': '배포할 패치를 지정하세요.',
+        'incorrect_type': '패치 번호가 올바르지 않습니다.',
+    })
+
+
+class StageProgressSerializer(serializers.Serializer):
+    """배포 한 건의 단계 하나: 대상 PC 수와 상태별 수, 오류율"""
+
+    order = serializers.IntegerField()
+    group = serializers.IntegerField()
+    group_name = serializers.CharField()
+    delay_minutes = serializers.IntegerField()
+    rollback_error_rate = serializers.FloatField()
+    state = serializers.ChoiceField(choices=['done', 'active', 'waiting', 'failed', 'upcoming'])
+    target_count = serializers.IntegerField()
+    applied = serializers.IntegerField()
+    error = serializers.IntegerField()
+    pending = serializers.IntegerField()
+    rolled_back = serializers.IntegerField()
+    error_rate = serializers.FloatField()
+
+
+class DeploymentPatchSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    kb_number = serializers.CharField()
+    target_os = serializers.CharField()
+
+
+class DeploymentStatusSerializer(serializers.Serializer):
+    """배포 한 건의 진행 상태"""
+
+    id = serializers.IntegerField()
+    policy = serializers.IntegerField()
+    patch = DeploymentPatchSerializer()
+    state = serializers.ChoiceField(choices=Deployment.State.values)
+    current_stage_order = serializers.IntegerField(allow_null=True)
+    stage_ready_at = serializers.DateTimeField(allow_null=True)
+    started_at = serializers.DateTimeField()
+    finished_at = serializers.DateTimeField(allow_null=True)
+    note = serializers.CharField(allow_blank=True)
+    stages = StageProgressSerializer(many=True)
+
+
+class AgentInstallTaskSerializer(serializers.Serializer):
+    deployment = serializers.IntegerField()
+    patch = serializers.IntegerField()
+    kb_number = serializers.CharField()
+
+
+class AgentUninstallTaskSerializer(serializers.Serializer):
+    patch = serializers.IntegerField()
+    kb_number = serializers.CharField()
+
+
+class AgentTasksSerializer(serializers.Serializer):
+    """에이전트가 서버에 물어서 가져가는 일 목록"""
+
+    install = AgentInstallTaskSerializer(many=True)
+    uninstall = AgentUninstallTaskSerializer(many=True)
 
 
 class ReportedSoftwareSerializer(serializers.Serializer):

@@ -3,7 +3,16 @@ from collections import defaultdict
 from django.db.models import Count
 from django.utils import timezone
 
-from .models import AffectedSoftware, Endpoint, InstalledSoftware, Patch, PatchStatus, Severity, Software
+from .models import (
+    AffectedSoftware,
+    Deployment,
+    Endpoint,
+    InstalledSoftware,
+    Patch,
+    PatchStatus,
+    Severity,
+    Software,
+)
 from .versions import is_affected
 
 UNSCORED = 'unscored'  # 아직 위험도 점수가 없는 CVE
@@ -40,25 +49,30 @@ def apply_agent_report(payload):
     touched_patch_ids = []
     for patch in Patch.objects.filter(target_os=endpoint.os_name):
         kb = patch.kb_number.upper()
-        if kb in error_codes:
+        previous = existing.get(patch.id)
+        if previous and previous.status == PatchStatus.Status.ROLLED_BACK:
+            # 롤백된 PC는 새 배포가 시작되어 되돌려지기 전까지 롤백 상태를 유지한다
+            # (에이전트가 아직 제거하지 않아 KB가 남아 있다고 보고해도 마찬가지다)
+            new_status, error_code = PatchStatus.Status.ROLLED_BACK, ''
+        elif kb in error_codes:
             new_status, error_code = PatchStatus.Status.ERROR, error_codes[kb]
         elif kb in installed_kbs:
             new_status, error_code = PatchStatus.Status.APPLIED, ''
         else:
             new_status, error_code = PatchStatus.Status.PENDING, ''
-            # 롤백된 패치는 PC가 아직 안 깔았다고 보고해도 롤백 상태를 유지한다
-            previous = existing.get(patch.id)
-            if previous and previous.status == PatchStatus.Status.ROLLED_BACK:
-                new_status = PatchStatus.Status.ROLLED_BACK
         PatchStatus.objects.update_or_create(
             endpoint=endpoint, patch=patch,
             defaults={'status': new_status, 'error_code': error_code, 'reported_at': now},
         )
         touched_patch_ids.append(patch.id)
 
-    # 오류 보고 패치 표시: 오류 상태인 PC가 하나라도 있으면 True, 모두 사라지면 False
+    # 오류 보고 패치 표시: 오류 상태인 PC가 하나라도 있거나 가장 최근 배포가 롤백됐으면 True, 둘 다 아니면 False
     for patch in Patch.objects.filter(id__in=touched_patch_ids):
-        has_error = PatchStatus.objects.filter(patch=patch, status=PatchStatus.Status.ERROR).exists()
+        latest = Deployment.objects.filter(patch=patch).order_by('-id').first()
+        has_error = (
+            PatchStatus.objects.filter(patch=patch, status=PatchStatus.Status.ERROR).exists()
+            or (latest is not None and latest.state == Deployment.State.ROLLED_BACK)
+        )
         if patch.is_error_reported != has_error:
             patch.is_error_reported = has_error
             patch.save(update_fields=['is_error_reported'])
@@ -159,4 +173,5 @@ def dashboard_summary():
             severity: len(ids) for severity, ids in affected_endpoints.items()
         },
         'unknown_assessments': unknown,
+        'running_deployments': Deployment.objects.filter(state=Deployment.State.RUNNING).count(),
     }

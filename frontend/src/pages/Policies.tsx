@@ -59,7 +59,7 @@ export default function Policies() {
               {policies.data.results.map((policy) => (
                 <tr key={policy.id}>
                   <td>
-                    <Link to={`/policies/${policy.id}/edit`}>{policy.name}</Link>
+                    <Link to={`/policies/${policy.id}`}>{policy.name}</Link>
                   </td>
                   <td>
                     <SeverityBadge severity={policy.min_severity} /> 이상
@@ -72,6 +72,7 @@ export default function Policies() {
                       : `${policy.stages.map((stage) => groupName.get(stage.group) ?? `그룹 ${stage.group}`).join(' → ')} (${policy.stages.length}단계)`}
                   </td>
                   <td className="actions">
+                    <Link to={`/policies/${policy.id}`}>배포</Link>
                     <Link to={`/policies/${policy.id}/edit`}>편집</Link>
                     <button className="link" onClick={() => remove(policy)}>
                       삭제
@@ -83,7 +84,7 @@ export default function Policies() {
           </table>
         </div>
       )}
-      <p className="axis-note">배포를 시작하고 진행 상태를 보는 기능은 아직 연결되지 않았습니다. 지금은 정책을 만들고 고치는 것만 됩니다.</p>
+      <p className="axis-note">정책 이름이나 "배포"를 누르면 배포를 시작하고 단계별 진행 상태를 볼 수 있습니다.</p>
     </main>
   )
 }

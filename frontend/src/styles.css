@@ -484,6 +484,57 @@ td.actions {
   white-space: nowrap;
 }
 
+/* ---- 배포 현황 ---- */
+.deploy-form {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.deploy-form .field {
+  width: min(520px, 100%);
+}
+
+.deployments {
+  display: grid;
+  gap: 16px;
+}
+
+.deploy-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+}
+
+.deploy-times {
+  margin: 2px 0 12px;
+  font-size: 13px;
+}
+
+.deploy-card .notice {
+  margin-bottom: 14px;
+}
+
+.stage-progress-list {
+  display: grid;
+  gap: 16px;
+}
+
+.stage-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.stage-meta {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
 /* ---- 정책 편집 ---- */
 .form-grid {
   display: grid;
