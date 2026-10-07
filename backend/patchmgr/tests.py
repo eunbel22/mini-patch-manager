@@ -11,10 +11,13 @@ from rest_framework.test import APITestCase
 
 from config.celery import app as celery_app
 
-from . import nvd, services, tasks, versions
+from django.utils.timezone import now as django_now
+
+from . import deployment, nvd, services, tasks, versions
 from .models import (
     CVE,
     AffectedSoftware,
+    Deployment,
     SoftwareCpe,
     Endpoint,
     EndpointGroup,
@@ -624,3 +627,352 @@ class VulnerabilityAssessmentTests(APITestCase):
         counts = body['software_vulnerable_endpoints_by_severity']
         self.assertEqual(counts, {'critical': 1, 'high': 1, 'medium': 0, 'low': 0, 'unscored': 2})
         self.assertEqual(body['unknown_assessments'], 1)
+
+
+class DeploymentTestBase(APITestCase):
+    """정책(테스트 그룹 → 일반 그룹)과 패치 하나, PC들을 만들어 둔다.
+
+    테스트 그룹: t1, t2 (Windows 10, 대상) + t3 (Windows 11, 대상 아님)
+    일반 그룹: g1~g10 (Windows 10, 대상) + g11 (Windows 11, 대상 아님)
+    1단계(테스트): 대기 0분, 롤백 기준 20% / 2단계(일반): 이전 단계 후 30분 대기, 롤백 기준 10%
+    """
+
+    OS = 'Windows 10 22H2'
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.test_group = EndpointGroup.objects.create(name='테스트')
+        cls.general_group = EndpointGroup.objects.create(name='일반')
+
+        def pc(name, group, os_name=cls.OS):
+            return Endpoint.objects.create(hostname=name, os_name=os_name, os_build='1', group=group)
+
+        cls.t1, cls.t2 = pc('t1', cls.test_group), pc('t2', cls.test_group)
+        cls.t3 = pc('t3', cls.test_group, 'Windows 11 23H2')
+        cls.general = [pc(f'g{i}', cls.general_group) for i in range(1, 11)]
+        cls.g11 = pc('g11', cls.general_group, 'Windows 11 23H2')
+
+        cls.cve = CVE.objects.create(cve_id='CVE-2024-43572', cvss_score='7.8', severity='high')
+        cls.patch = Patch.objects.create(kb_number='KB5044273', target_os=cls.OS)
+        cls.patch.cves.add(cls.cve)
+
+        cls.policy = Policy.objects.create(name='높음 이상 단계 배포', min_severity='high')
+        cls.stage1 = PolicyStage.objects.create(
+            policy=cls.policy, order=1, group=cls.test_group, delay_minutes=0, rollback_error_rate=0.2)
+        cls.stage2 = PolicyStage.objects.create(
+            policy=cls.policy, order=2, group=cls.general_group, delay_minutes=30, rollback_error_rate=0.1)
+
+    def report(self, endpoint, installed=(), errors=()):
+        services.apply_agent_report({
+            'hostname': endpoint.hostname, 'os_name': endpoint.os_name, 'os_build': endpoint.os_build,
+            'installed_software': [], 'installed_kbs': list(installed),
+            'errors': [{'kb_number': kb, 'error_code': '0x80070643'} for kb in errors],
+        })
+
+    def install_all(self, endpoints):
+        for endpoint in endpoints:
+            self.report(endpoint, installed=['KB5044273'])
+
+    def start(self, now=None):
+        return deployment.start_deployment(self.policy, self.patch, now)
+
+    def install_kbs(self, endpoint, now=None):
+        return [task['kb_number'] for task in deployment.tasks_for_endpoint(endpoint, now)['install']]
+
+    def statuses(self, endpoints):
+        return {
+            endpoint.hostname: PatchStatus.objects.filter(endpoint=endpoint, patch=self.patch)
+            .values_list('status', flat=True).first()
+            for endpoint in endpoints
+        }
+
+
+class DeploymentStartTests(DeploymentTestBase):
+    def test_start_begins_at_the_first_stage(self):
+        started = self.start()
+        self.assertEqual((started.state, started.current_stage), ('running', self.stage1))
+        self.assertIsNotNone(started.stage_started_at)
+
+    def test_start_via_api_returns_progress(self):
+        response = self.client.post(f'/api/policies/{self.policy.id}/deploy/', {'patch': self.patch.id}, format='json')
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual((body['state'], body['current_stage_order']), ('running', 1))
+        self.assertEqual([stage['state'] for stage in body['stages']], ['active', 'upcoming'])
+        self.assertEqual([stage['target_count'] for stage in body['stages']], [2, 10])  # 다른 Windows는 대상이 아니다
+
+    def test_patch_below_the_minimum_severity_is_rejected(self):
+        self.policy.min_severity = 'critical'
+        self.policy.save()
+        response = self.client.post(f'/api/policies/{self.policy.id}/deploy/', {'patch': self.patch.id}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('최소 위험도', response.json()['detail'])
+
+    def test_patch_without_cves_is_not_a_target(self):
+        bare = Patch.objects.create(kb_number='KB1', target_os=self.OS)
+        with self.assertRaises(deployment.DeploymentError):
+            deployment.start_deployment(self.policy, bare)
+
+    def test_inactive_policy_and_policy_without_stages_are_rejected(self):
+        self.policy.is_active = False
+        self.policy.save()
+        with self.assertRaises(deployment.DeploymentError):
+            self.start()
+        self.policy.is_active = True
+        self.policy.save()
+        self.policy.stages.all().delete()
+        with self.assertRaises(deployment.DeploymentError):
+            self.start()
+
+    def test_second_deployment_of_the_same_patch_conflicts(self):
+        self.start()
+        response = self.client.post(f'/api/policies/{self.policy.id}/deploy/', {'patch': self.patch.id}, format='json')
+        self.assertEqual(response.status_code, 409)
+
+    def test_missing_or_unknown_patch_is_rejected(self):
+        for payload in ({}, {'patch': 99999}):
+            response = self.client.post(f'/api/policies/{self.policy.id}/deploy/', payload, format='json')
+            self.assertEqual(response.status_code, 400, payload)
+
+    def test_stage_without_target_pcs_is_skipped_at_once(self):
+        empty = EndpointGroup.objects.create(name='빈 그룹')
+        self.stage1.group = empty
+        self.stage1.save()
+        started = self.start()
+        self.assertEqual(started.current_stage, self.stage2)  # 1단계는 대상이 없어 바로 넘어갔다
+
+
+class AgentTasksTests(DeploymentTestBase):
+    def test_only_the_current_stage_group_and_target_os_get_install_tasks(self):
+        self.start()
+        self.assertEqual(self.install_kbs(self.t1), ['KB5044273'])
+        self.assertEqual(self.install_kbs(self.t2), ['KB5044273'])
+        self.assertEqual(self.install_kbs(self.t3), [])  # 대상 Windows가 아님
+        self.assertEqual(self.install_kbs(self.general[0]), [])  # 아직 2단계가 아님
+
+    def test_no_task_without_a_running_deployment(self):
+        self.assertEqual(self.install_kbs(self.t1), [])
+
+    def test_installed_pc_is_not_asked_again_and_failed_pc_is_not_retried(self):
+        self.start()
+        self.report(self.t1, installed=['KB5044273'])
+        self.report(self.t2, errors=['KB5044273'])
+        self.assertEqual(self.install_kbs(self.t1), [])
+        self.assertEqual(self.install_kbs(self.t2), [])
+
+    def test_next_stage_waits_for_its_delay(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        deployment.advance_all(now)
+        self.assertEqual(Deployment.objects.get().current_stage, self.stage2)
+        self.assertEqual(self.install_kbs(self.general[0], now + timedelta(minutes=29)), [])
+        self.assertEqual(self.install_kbs(self.general[0], now + timedelta(minutes=31)), ['KB5044273'])
+
+    def test_tasks_api_and_unknown_host(self):
+        self.start()
+        body = self.client.get('/api/agents/t1/tasks/').json()
+        self.assertEqual([task['kb_number'] for task in body['install']], ['KB5044273'])
+        self.assertEqual(body['uninstall'], [])
+        self.assertEqual(self.client.get('/api/agents/nobody/tasks/').status_code, 404)
+
+
+class DeploymentAdvanceTests(DeploymentTestBase):
+    def test_stage_is_not_finished_until_every_target_has_a_result(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])  # t2는 아직
+        self.assertEqual(deployment.advance_all(now), 0)
+        self.assertEqual(Deployment.objects.get().current_stage, self.stage1)
+
+    def test_runs_through_every_stage_and_completes(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        deployment.advance_all(now)
+        later = now + timedelta(minutes=31)
+        self.install_all(self.general)
+        deployment.advance_all(later)
+        finished = Deployment.objects.get()
+        self.assertEqual((finished.state, finished.finished_at), ('completed', later))
+        self.assertEqual(self.install_kbs(self.t1, later), [])  # 끝난 배포는 더 지시하지 않는다
+
+    def test_stage_two_does_not_finish_before_its_delay_even_if_everyone_reported(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        deployment.advance_all(now)
+        self.install_all(self.general)
+        deployment.advance_all(now + timedelta(minutes=10))  # 30분 대기 중
+        self.assertEqual(Deployment.objects.get().state, 'running')
+
+    def test_error_rate_equal_to_the_limit_does_not_roll_back(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        deployment.advance_all(now)
+        self.install_all(self.general[:9])
+        self.report(self.general[9], errors=['KB5044273'])  # 1/10 = 10% = 기준(10%)
+        deployment.advance_all(now + timedelta(minutes=31))
+        self.assertEqual(Deployment.objects.get().state, 'completed')
+
+    def test_error_rate_over_the_limit_rolls_back_and_marks_the_patch(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        deployment.advance_all(now)
+        self.install_all(self.general[:8])
+        for endpoint in self.general[8:]:
+            self.report(endpoint, errors=['KB5044273'])  # 2/10 = 20% > 10%
+        deployment.advance_all(now + timedelta(minutes=31))
+
+        rolled = Deployment.objects.get()
+        self.assertEqual(rolled.state, 'rolled_back')
+        self.assertIn('2단계 오류율 20%', rolled.note)
+        self.assertIn('롤백 기준 10%', rolled.note)
+        self.patch.refresh_from_db()
+        self.assertTrue(self.patch.is_error_reported)
+        statuses = self.statuses([self.t1, *self.general])
+        self.assertEqual(statuses['t1'], 'rolled_back')  # 앞 단계에서 적용된 PC도 되돌린다
+        self.assertEqual(statuses['g1'], 'rolled_back')
+        self.assertEqual(statuses['g9'], 'error')  # 설치에 실패한 PC는 되돌릴 것이 없다
+
+    def test_first_stage_error_rolls_back_before_the_next_stage_starts(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])
+        self.report(self.t2, errors=['KB5044273'])  # 1/2 = 50% > 20%
+        deployment.advance_all(now)
+        rolled = Deployment.objects.get()
+        self.assertEqual((rolled.state, rolled.current_stage), ('rolled_back', self.stage1))
+        self.assertEqual(self.install_kbs(self.general[0], now + timedelta(hours=1)), [])  # 2단계는 시작하지 않았다
+
+    def test_rolled_back_pc_gets_an_uninstall_task_and_stays_rolled_back(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])
+        self.report(self.t2, errors=['KB5044273'])
+        deployment.advance_all(now)
+        tasks_now = deployment.tasks_for_endpoint(self.t1, now)
+        self.assertEqual([task['kb_number'] for task in tasks_now['uninstall']], ['KB5044273'])
+        self.report(self.t1, installed=['KB5044273'])  # 에이전트가 아직 제거하지 않았어도
+        self.assertEqual(self.statuses([self.t1])['t1'], 'rolled_back')
+        self.report(self.t1, installed=[])  # 제거한 뒤에도
+        self.assertEqual(self.statuses([self.t1])['t1'], 'rolled_back')
+
+    def test_patch_stays_marked_while_the_latest_deployment_is_rolled_back(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])
+        self.report(self.t2, errors=['KB5044273'])
+        deployment.advance_all(now)
+        self.report(self.t2, installed=[])  # 오류 PC가 사라져도
+        self.patch.refresh_from_db()
+        self.assertTrue(self.patch.is_error_reported)
+
+    def test_a_new_deployment_after_a_rollback_starts_from_scratch(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])
+        self.report(self.t2, errors=['KB5044273'])
+        deployment.advance_all(now)
+        self.assertEqual(self.statuses([self.t1])['t1'], 'rolled_back')
+        again = self.start(now + timedelta(hours=1))  # 롤백 뒤에는 다시 시작할 수 있다
+        self.assertEqual(again.state, 'running')  # 이전 오류가 남아 있어 시작하자마자 다시 롤백되지 않는다
+        self.assertEqual(self.statuses([self.t1, self.t2]), {'t1': 'pending', 't2': 'pending'})
+        self.assertEqual(self.install_kbs(self.t2, now + timedelta(hours=1)), ['KB5044273'])  # 실패했던 PC도 다시 시도한다
+
+    def test_report_processing_advances_the_deployment_right_away(self):
+        celery_app.conf.task_always_eager = True
+        self.addCleanup(setattr, celery_app.conf, 'task_always_eager', False)
+        self.start()
+        for endpoint in (self.t1, self.t2):
+            self.client.post('/api/agents/report/', {
+                'hostname': endpoint.hostname, 'os_name': endpoint.os_name, 'os_build': '1',
+                'installed_kbs': ['KB5044273'],
+            }, format='json')
+        self.assertEqual(Deployment.objects.get().current_stage, self.stage2)  # 1분 주기를 기다리지 않았다
+
+    def test_periodic_task_returns_how_many_deployments_changed(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        self.assertEqual(tasks.advance_deployments(), {'changed': 1})
+        self.assertEqual(tasks.advance_deployments(), {'changed': 0})
+
+
+class DeploymentApiTests(DeploymentTestBase):
+    def test_status_api_shows_stage_states_and_counts(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])
+        body = self.client.get(f'/api/policies/{self.policy.id}/status/').json()
+        self.assertEqual(len(body), 1)
+        first, second = body[0]['stages']
+        self.assertEqual((first['state'], first['target_count'], first['applied'], first['pending']), ('active', 2, 1, 1))
+        self.assertEqual((second['state'], second['pending']), ('upcoming', 10))
+        self.assertEqual(body[0]['patch']['kb_number'], 'KB5044273')
+
+    def test_status_api_marks_the_failed_and_waiting_stages(self):
+        now = django_now()
+        self.start(now)
+        self.install_all([self.t1, self.t2])
+        deployment.advance_all(now)
+        waiting = self.client.get(f'/api/policies/{self.policy.id}/status/').json()[0]
+        self.assertEqual([stage['state'] for stage in waiting['stages']], ['done', 'waiting'])
+        self.assertIsNotNone(waiting['stage_ready_at'])
+
+        for endpoint in self.general[:3]:
+            self.report(endpoint, errors=['KB5044273'])  # 3/10 = 30% > 10%
+        deployment.advance_all(now + timedelta(minutes=31))
+        failed = self.client.get(f'/api/policies/{self.policy.id}/status/').json()[0]
+        self.assertEqual([stage['state'] for stage in failed['stages']], ['done', 'failed'])
+        self.assertEqual(failed['state'], 'rolled_back')
+        self.assertEqual(failed['stages'][1]['error_rate'], 0.3)
+
+    def test_policy_stages_cannot_change_or_the_policy_be_deleted_while_running(self):
+        self.start()
+        payload = {
+            'name': self.policy.name, 'min_severity': 'high',
+            'stages': [{'order': 1, 'group': self.test_group.id, 'delay_minutes': 0, 'rollback_error_rate': 0.5}],
+        }
+        response = self.client.put(f'/api/policies/{self.policy.id}/', payload, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('진행 중인 배포', str(response.json()))
+        self.assertEqual(self.client.delete(f'/api/policies/{self.policy.id}/').status_code, 409)
+
+    def test_policy_can_be_edited_and_deleted_after_the_deployment_ends(self):
+        now = django_now()
+        self.start(now)
+        self.report(self.t1, installed=['KB5044273'])
+        self.report(self.t2, errors=['KB5044273'])
+        deployment.advance_all(now)  # 롤백으로 끝남
+        payload = {
+            'name': self.policy.name, 'min_severity': 'high',
+            'stages': [{'order': 1, 'group': self.test_group.id, 'delay_minutes': 0, 'rollback_error_rate': 0.5}],
+        }
+        self.assertEqual(self.client.put(f'/api/policies/{self.policy.id}/', payload, format='json').status_code, 200)
+        self.assertEqual(self.client.delete(f'/api/policies/{self.policy.id}/').status_code, 204)
+
+    def test_other_fields_of_a_running_policy_can_still_be_changed(self):
+        self.start()
+        response = self.client.patch(f'/api/policies/{self.policy.id}/', {'is_active': False}, format='json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_patch_list_for_a_policy_offers_only_eligible_free_patches(self):
+        Patch.objects.create(kb_number='KB1', target_os=self.OS)  # CVE가 없어 대상이 아님
+        busy = Patch.objects.create(kb_number='KB2', target_os='Windows 11 23H2')
+        busy.cves.add(self.cve)
+        names = lambda: [row['kb_number'] for row in
+                         self.client.get('/api/patches/', {'policy': self.policy.id}).json()['results']]
+        self.assertEqual(names(), ['KB2', 'KB5044273'])
+        self.start()  # KB5044273 배포 시작 -> 목록에서 빠진다
+        self.assertEqual(names(), ['KB2'])
+        row = self.client.get('/api/patches/', {'policy': self.policy.id}).json()['results'][0]
+        self.assertEqual(row['max_severity'], 'high')
+        self.assertEqual(self.client.get('/api/patches/', {'policy': 99999}).json()['count'], 0)
+
+    def test_dashboard_counts_running_deployments(self):
+        self.assertEqual(self.client.get('/api/dashboard/summary/').json()['running_deployments'], 0)
+        self.start()
+        self.assertEqual(self.client.get('/api/dashboard/summary/').json()['running_deployments'], 1)

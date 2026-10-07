@@ -284,7 +284,7 @@ function PolicyForm({ id, policy, groups }: { id: string | undefined; policy: Po
           취소
         </Link>
       </div>
-      <p className="axis-note">배포를 시작하는 기능은 아직 연결되지 않았습니다. 저장한 정책은 배포 기능을 만든 뒤 사용됩니다.</p>
+      <p className="axis-note">저장한 뒤 정책 상세 화면에서 패치를 골라 배포를 시작합니다. 진행 중인 배포가 있으면 배포 단계는 바꿀 수 없습니다.</p>
     </form>
   )
 }

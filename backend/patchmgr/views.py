@@ -1,15 +1,21 @@
 from django.db.models import Count, F, Q
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import CVE, Endpoint, EndpointGroup, Patch, Policy
+from .deployment import DeploymentError, deployment_status, is_eligible, start_deployment, tasks_for_endpoint
+from .models import CVE, Deployment, Endpoint, EndpointGroup, Patch, Policy
 from .services import dashboard_summary, endpoint_stats
 from .tasks import process_agent_report
 from .serializers import (
     AgentReportSerializer,
+    AgentTasksSerializer,
     CVESerializer,
+    DeployRequestSerializer,
+    DeploymentStatusSerializer,
+    PatchListSerializer,
     EndpointDetailSerializer,
     EndpointGroupSerializer,
     EndpointListSerializer,
@@ -71,11 +77,28 @@ class CVEViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     serializer_class = CVESerializer
 
 
-class PatchViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    """패치(KB) 상세"""
+@extend_schema_view(
+    list=extend_schema(parameters=[
+        OpenApiParameter('policy', int, description='정책 id. 주면 그 정책으로 배포할 수 있는 패치만(최소 위험도 이상이고 진행 중인 배포가 없는 것)'),
+    ]),
+)
+class PatchViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """패치(KB) 목록과 상세"""
 
-    queryset = Patch.objects.prefetch_related('cves')
-    serializer_class = PatchSerializer
+    def get_serializer_class(self):
+        return PatchListSerializer if self.action == 'list' else PatchSerializer
+
+    def get_queryset(self):
+        queryset = Patch.objects.prefetch_related('cves').order_by('kb_number', 'target_os')
+        policy_id = self.request.query_params.get('policy') if self.action == 'list' else None
+        if policy_id:
+            policy = Policy.objects.filter(pk=policy_id).first() if policy_id.isdigit() else None
+            if policy is None:
+                return queryset.none()
+            busy = set(Deployment.objects.filter(state=Deployment.State.RUNNING).values_list('patch_id', flat=True))
+            ids = [patch.id for patch in queryset if is_eligible(policy, patch) and patch.id not in busy]
+            queryset = queryset.filter(id__in=ids)
+        return queryset
 
 
 class PolicyViewSet(viewsets.ModelViewSet):
@@ -83,6 +106,53 @@ class PolicyViewSet(viewsets.ModelViewSet):
 
     queryset = Policy.objects.prefetch_related('stages').order_by('id')
     serializer_class = PolicySerializer
+
+    def destroy(self, request, *args, **kwargs):
+        policy = self.get_object()
+        if policy.deployments.filter(state=Deployment.State.RUNNING).exists():
+            return Response({'detail': '진행 중인 배포가 있는 정책은 삭제할 수 없습니다.'}, status=status.HTTP_409_CONFLICT)
+        return super().destroy(request, *args, **kwargs)
+
+    @extend_schema(
+        request=DeployRequestSerializer,
+        responses={
+            201: DeploymentStatusSerializer,
+            400: OpenApiResponse(description='꺼 둔 정책, 단계 없음, 정책의 대상이 아닌 패치 등'),
+            409: OpenApiResponse(description='그 패치는 이미 배포가 진행 중'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='deploy')
+    def deploy(self, request, pk=None):
+        """정책을 지정한 패치 하나에 실행하기 시작한다. 1단계(보통 테스트 그룹)부터 시작한다."""
+        policy = self.get_object()
+        serializer = DeployRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            deployment = start_deployment(policy, serializer.validated_data['patch'])
+        except DeploymentError as error:
+            return Response({'detail': error.message}, status=error.status_code)
+        return Response(DeploymentStatusSerializer(deployment_status(deployment)).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(responses=DeploymentStatusSerializer(many=True))
+    @action(detail=True, methods=['get'], url_path='status')
+    def deployment_progress(self, request, pk=None):
+        """이 정책의 배포 진행 상태 (최근 20건). 단계마다 대상 PC 수, 상태별 수, 오류율을 준다."""
+        policy = self.get_object()
+        deployments = policy.deployments.select_related('policy', 'patch', 'current_stage').order_by('-id')[:20]
+        return Response(DeploymentStatusSerializer([deployment_status(item) for item in deployments], many=True).data)
+
+
+class AgentTasksView(APIView):
+    """에이전트가 서버에 "나한테 할 일이 있나?"를 묻는 API. 설치해도 되는 KB(install)와 제거할 KB(uninstall)를 준다."""
+
+    @extend_schema(
+        responses={200: AgentTasksSerializer, 404: OpenApiResponse(description='등록되지 않은 PC')},
+    )
+    def get(self, request, hostname):
+        endpoint = Endpoint.objects.filter(hostname=hostname).first()
+        if endpoint is None:
+            return Response({'detail': '등록되지 않은 PC입니다.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(AgentTasksSerializer(tasks_for_endpoint(endpoint)).data)
 
 
 class AgentReportView(APIView):

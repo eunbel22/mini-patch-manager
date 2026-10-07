@@ -73,6 +73,11 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': timedelta(minutes=int(os.environ.get('NVD_FETCH_INTERVAL_MINUTES', '360'))),
         'kwargs': {'hours': 12},
     },
+    # 진행 중인 배포를 1분마다 점검해 단계를 넘기거나 롤백한다 (에이전트 보고를 처리한 직후에도 점검한다)
+    'advance-deployments': {
+        'task': 'patchmgr.tasks.advance_deployments',
+        'schedule': timedelta(seconds=int(os.environ.get('DEPLOY_CHECK_SECONDS', '60'))),
+    },
 }
 
 SPECTACULAR_SETTINGS = {
