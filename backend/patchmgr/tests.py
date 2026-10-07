@@ -62,6 +62,43 @@ class EndpointApiTests(ApiTestBase):
         self.assertEqual(body['patch_statuses'][0]['kb_number'], 'KB5044273')
 
 
+class EndpointListTests(ApiTestBase):
+    def _hostnames(self, **params):
+        body = self.client.get('/api/endpoints/', params).json()
+        return [row['hostname'] for row in body['results']]
+
+    def test_search_by_hostname_ignores_case_and_matches_part(self):
+        self.assertEqual(self._hostnames(search='PC-00'), ['pc-001', 'pc-002'])
+        self.assertEqual(self._hostnames(search='002'), ['pc-002'])
+        self.assertEqual(self._hostnames(search='  PC-002 '), ['pc-002'])  # 앞뒤 공백은 무시
+        self.assertEqual(self._hostnames(search='nothing'), [])
+
+    def test_search_combines_with_group_and_status_filters(self):
+        self.assertEqual(self._hostnames(search='pc', group=self.general_group.id), ['pc-002'])
+        self.assertEqual(self._hostnames(search='pc-001', status='error'), [])
+        self.assertEqual(self._hostnames(search='pc', status='error'), ['pc-002'])
+
+    def test_each_row_has_unapplied_error_and_vulnerable_counts(self):
+        cve = CVE.objects.create(cve_id='CVE-2021-44228', cvss_score='10.0', severity='critical')
+        AffectedSoftware.objects.create(cve=cve, software=self.software, version_end_excluding='2.15.0')
+        rows = {row['hostname']: row for row in self.client.get('/api/endpoints/').json()['results']}
+        # pc-001: KB 적용됨, 설치된 Log4j 2.14.0이 범위(2.15.0 미만)에 들어감
+        self.assertEqual(
+            (rows['pc-001']['unapplied_patch_count'], rows['pc-001']['error_patch_count'], rows['pc-001']['vulnerable_cve_count']),
+            (0, 0, 1),
+        )
+        # pc-002: KB가 오류 상태라 미적용으로도 세고, 설치된 소프트웨어는 없음
+        self.assertEqual(
+            (rows['pc-002']['unapplied_patch_count'], rows['pc-002']['error_patch_count'], rows['pc-002']['vulnerable_cve_count']),
+            (1, 1, 0),
+        )
+
+    def test_counts_are_zero_when_nothing_is_reported(self):
+        PatchStatus.objects.all().delete()
+        rows = self.client.get('/api/endpoints/').json()['results']
+        self.assertTrue(all(row['unapplied_patch_count'] == 0 and row['vulnerable_cve_count'] == 0 for row in rows))
+
+
 class CveAndPatchApiTests(ApiTestBase):
     def test_cve_detail_lists_fixing_patches(self):
         response = self.client.get(f'/api/cves/{self.cve.id}/')

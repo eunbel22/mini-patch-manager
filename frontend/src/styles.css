@@ -406,6 +406,59 @@ th.num {
   margin-top: 8px;
 }
 
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.filters input {
+  width: 240px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--axis);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.filters label {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+select {
+  padding: 7px 10px;
+  border: 1px solid var(--axis);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.pager-buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+td.strong {
+  font-weight: 600;
+}
+
 .search-form {
   display: flex;
   gap: 8px;

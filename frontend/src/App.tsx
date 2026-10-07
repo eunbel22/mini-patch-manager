@@ -1,5 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
+import EndpointDetail from './pages/EndpointDetail'
+import Endpoints from './pages/Endpoints'
 import Search from './pages/Search'
 
 function Placeholder({ title }: { title: string }) {
@@ -28,7 +30,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/search" element={<Search />} />
-        <Route path="/endpoints" element={<Placeholder title="PC 목록" />} />
+        <Route path="/endpoints" element={<Endpoints />} />
+        <Route path="/endpoints/:id" element={<EndpointDetail />} />
         <Route path="/policies" element={<Placeholder title="정책" />} />
         <Route path="*" element={<Placeholder title="페이지를 찾을 수 없습니다" />} />
       </Routes>

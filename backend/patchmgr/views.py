@@ -1,18 +1,18 @@
 from django.db.models import Count, F, Q
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import CVE, Endpoint, EndpointGroup, Patch, Policy
-from .services import dashboard_summary
+from .services import dashboard_summary, endpoint_stats
 from .tasks import process_agent_report
 from .serializers import (
     AgentReportSerializer,
     CVESerializer,
     EndpointDetailSerializer,
     EndpointGroupSerializer,
-    EndpointSerializer,
+    EndpointListSerializer,
     PatchSerializer,
     PolicySerializer,
     SearchResultSerializer,
@@ -26,23 +26,42 @@ class EndpointGroupViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = EndpointGroupSerializer
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=[
+        OpenApiParameter('group', int, description='그룹 id'),
+        OpenApiParameter('status', str, description='패치 상태(pending, applied, error, rolled_back). 그 상태인 패치가 하나라도 있는 PC'),
+        OpenApiParameter('search', str, description='호스트 이름의 일부 (대소문자 구분 없음)'),
+    ]),
+)
 class EndpointViewSet(viewsets.ReadOnlyModelViewSet):
-    """PC 목록과 상세. 목록은 ?group=<그룹 id>, ?status=<패치 상태>로 거를 수 있다."""
+    """PC 목록과 상세. 목록은 ?group=, ?status=, ?search=(호스트 이름)로 거를 수 있고 줄마다 미적용 · 오류 · 취약 건수가 붙는다."""
 
     def get_queryset(self):
         queryset = Endpoint.objects.select_related('group').order_by('id')
         if self.action == 'retrieve':
             return queryset.prefetch_related('installed_software__software', 'patch_statuses__patch')
-        group = self.request.query_params.get('group')
-        status = self.request.query_params.get('status')
-        if group:
-            queryset = queryset.filter(group_id=group)
-        if status:
-            queryset = queryset.filter(patch_statuses__status=status).distinct()
+        params = self.request.query_params
+        if params.get('group'):
+            queryset = queryset.filter(group_id=params['group'])
+        if params.get('status'):
+            queryset = queryset.filter(patch_statuses__status=params['status']).distinct()
+        search = params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(hostname__icontains=search)
         return queryset
 
     def get_serializer_class(self):
-        return EndpointDetailSerializer if self.action == 'retrieve' else EndpointSerializer
+        return EndpointDetailSerializer if self.action == 'retrieve' else EndpointListSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        items = page if page is not None else list(queryset)
+        stats = endpoint_stats([endpoint.id for endpoint in items])  # 이 쪽에 보이는 PC만 계산한다
+        serializer = self.get_serializer(items, many=True, context={**self.get_serializer_context(), 'stats': stats})
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 class CVEViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):

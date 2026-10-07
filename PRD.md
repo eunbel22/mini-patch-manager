@@ -33,7 +33,7 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 | CVE · KB 검색 | `GET /api/search/?q=` | CVE 번호, KB 번호(숫자만도 가능), CVE 설명의 일부로 통합 검색. 2글자 미만이면 400. CVE 번호로 찾으면 그 CVE를 고치는 KB도 함께 준다. 종류별로 최대 20건 |
 | | `GET /api/cves/{id}` | CVE 상세 (CVSS, 영향 SW, 해결 KB) |
 | | `GET /api/patches/{id}` | 패치(KB) 상세 |
-| PC 목록 | `GET /api/endpoints` | PC 목록 (그룹, 패치 상태 필터) |
+| PC 목록 | `GET /api/endpoints/` | PC 목록. `?group=`(그룹 id), `?status=`(그 상태인 패치가 하나라도 있는 PC), `?search=`(호스트 이름의 일부)로 거르고 50개씩 나눠 준다. 줄마다 미적용 패치 수, 오류 패치 수, 취약한 CVE 수(판단 불가 제외)가 붙는다 |
 | | `GET /api/endpoints/{id}` | PC 상세 (설치 SW, 패치 상태, 취약점 판단 결과) |
 | | `GET /api/groups` | 그룹 목록 (필터와 정책 편집에서 그룹을 고르는 데 사용) |
 | 대시보드 | `GET /api/dashboard/summary` | 패치율, 위험도별 미적용 PC, 진행 중 배포 |

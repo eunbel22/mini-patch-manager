@@ -48,6 +48,29 @@ class EndpointSerializer(serializers.ModelSerializer):
         fields = ['id', 'hostname', 'os_name', 'os_build', 'group', 'group_name', 'last_reported_at']
 
 
+class EndpointListSerializer(EndpointSerializer):
+    """PC 목록의 한 줄. 숫자는 목록 한 쪽 분량을 모아서 한 번에 계산해 context로 받는다."""
+
+    unapplied_patch_count = serializers.SerializerMethodField()
+    error_patch_count = serializers.SerializerMethodField()
+    vulnerable_cve_count = serializers.SerializerMethodField()
+
+    class Meta(EndpointSerializer.Meta):
+        fields = EndpointSerializer.Meta.fields + ['unapplied_patch_count', 'error_patch_count', 'vulnerable_cve_count']
+
+    def _stat(self, obj, key) -> int:
+        return self.context.get('stats', {}).get(obj.id, {}).get(key, 0)
+
+    def get_unapplied_patch_count(self, obj) -> int:
+        return self._stat(obj, 'unapplied')
+
+    def get_error_patch_count(self, obj) -> int:
+        return self._stat(obj, 'error')
+
+    def get_vulnerable_cve_count(self, obj) -> int:
+        return self._stat(obj, 'vulnerable')
+
+
 class VulnerabilitySerializer(serializers.Serializer):
     """PC에 설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는지에 대한 판단 결과"""
 

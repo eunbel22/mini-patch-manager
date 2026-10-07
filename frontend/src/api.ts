@@ -81,6 +81,70 @@ export interface PatchDetail {
   cves: CveSummary[]
 }
 
+export interface Paginated<T> {
+  count: number
+  next: string | null
+  previous: string | null
+  results: T[]
+}
+
+export interface Group {
+  id: number
+  name: string
+}
+
+export interface EndpointRow {
+  id: number
+  hostname: string
+  os_name: string
+  os_build: string
+  group: number
+  group_name: string
+  last_reported_at: string | null
+  unapplied_patch_count: number
+  error_patch_count: number
+  vulnerable_cve_count: number
+}
+
+export interface InstalledSoftwareRow {
+  id: number
+  name: string
+  vendor: string
+  version: string
+}
+
+export interface PatchStatusRow {
+  id: number
+  patch: number
+  kb_number: string
+  target_os: string
+  status: StatusKey
+  error_code: string
+  reported_at: string | null
+}
+
+export interface Vulnerability {
+  cve_id: string
+  severity: string
+  cvss_score: string | null
+  software: string
+  installed_version: string
+  status: 'vulnerable' | 'unknown'
+}
+
+export interface EndpointDetail {
+  id: number
+  hostname: string
+  os_name: string
+  os_build: string
+  group: number
+  group_name: string
+  last_reported_at: string | null
+  installed_software: InstalledSoftwareRow[]
+  patch_statuses: PatchStatusRow[]
+  vulnerabilities: Vulnerability[]
+}
+
 // ---- 요청 ----
 
 export class ApiError extends Error {
@@ -101,6 +165,8 @@ export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> 
     } catch {
       // 본문이 JSON이 아니면 기본 문구를 쓴다
     }
+    // 404는 서버가 영어 문구를 보내므로(Invalid page. 등) 한국어로 바꿔 보여 준다
+    if (response.status === 404) detail = '요청한 항목(또는 쪽)을 찾을 수 없습니다.'
     throw new ApiError(response.status, detail || `요청에 실패했습니다 (HTTP ${response.status})`)
   }
   return response.json() as Promise<T>

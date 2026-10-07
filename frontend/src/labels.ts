@@ -48,3 +48,8 @@ export function formatPercent(rate: number): string {
 export function formatDate(iso: string | null): string {
   return iso ? iso.slice(0, 10) : '—'
 }
+
+/** 서버가 보내는 시각은 한국 시간대(+09:00)가 붙어 있어서 앞부분을 그대로 쓰면 한국 시간이 된다 */
+export function formatDateTime(iso: string | null): string {
+  return iso ? iso.slice(0, 16).replace('T', ' ') : '—'
+}
