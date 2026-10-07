@@ -4,7 +4,7 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from patchmgr.models import Endpoint, EndpointGroup, InstalledSoftware, Software
+from patchmgr.models import Endpoint, EndpointGroup, InstalledSoftware, Policy, PolicyStage, Software
 
 # 모두 개발 · 시연용 가상 데이터다. 실제 PC나 실제 버전 현황이 아니다.
 
@@ -76,6 +76,17 @@ class Command(BaseCommand):
                         software=item,
                         defaults={'version': rng.choice(versions[item.name])},
                     )
+
+        # 시연용 정책 하나: 높음 이상 패치를 테스트 그룹에 먼저 배포하고, 1시간 뒤 일반 그룹에 배포한다
+        policy, created = Policy.objects.get_or_create(
+            name='높음 이상 단계 배포', defaults={'min_severity': 'high', 'is_active': True},
+        )
+        if created:
+            by_name = {group.name: group for group in groups}
+            PolicyStage.objects.create(policy=policy, order=1, group=by_name['테스트'],
+                                       delay_minutes=0, rollback_error_rate=0.1)
+            PolicyStage.objects.create(policy=policy, order=2, group=by_name['일반'],
+                                       delay_minutes=60, rollback_error_rate=0.05)
 
         # 소프트웨어를 NVD 이름과 잇는 매핑도 함께 넣는다
         call_command('seed_cpe_mappings', stdout=self.stdout)

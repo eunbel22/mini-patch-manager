@@ -1,6 +1,7 @@
 from django.db import transaction
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
 from .models import (
     CVE,
@@ -46,6 +47,29 @@ class EndpointSerializer(serializers.ModelSerializer):
     class Meta:
         model = Endpoint
         fields = ['id', 'hostname', 'os_name', 'os_build', 'group', 'group_name', 'last_reported_at']
+
+
+class EndpointListSerializer(EndpointSerializer):
+    """PC 목록의 한 줄. 숫자는 목록 한 쪽 분량을 모아서 한 번에 계산해 context로 받는다."""
+
+    unapplied_patch_count = serializers.SerializerMethodField()
+    error_patch_count = serializers.SerializerMethodField()
+    vulnerable_cve_count = serializers.SerializerMethodField()
+
+    class Meta(EndpointSerializer.Meta):
+        fields = EndpointSerializer.Meta.fields + ['unapplied_patch_count', 'error_patch_count', 'vulnerable_cve_count']
+
+    def _stat(self, obj, key) -> int:
+        return self.context.get('stats', {}).get(obj.id, {}).get(key, 0)
+
+    def get_unapplied_patch_count(self, obj) -> int:
+        return self._stat(obj, 'unapplied')
+
+    def get_error_patch_count(self, obj) -> int:
+        return self._stat(obj, 'error')
+
+    def get_vulnerable_cve_count(self, obj) -> int:
+        return self._stat(obj, 'vulnerable')
 
 
 class VulnerabilitySerializer(serializers.Serializer):
@@ -154,6 +178,11 @@ class PolicyStageSerializer(serializers.ModelSerializer):
 
 
 class PolicySerializer(serializers.ModelSerializer):
+    # 이름 중복 검사기는 안에 문구를 가지고 있어서 필드 설정으로는 바꿀 수 없다. 칸을 직접 선언해 문구를 지정한다.
+    name = serializers.CharField(
+        max_length=100,
+        validators=[UniqueValidator(queryset=Policy.objects.all(), message='같은 이름의 정책이 이미 있습니다.')],
+    )
     stages = PolicyStageSerializer(many=True, required=False)
 
     class Meta:

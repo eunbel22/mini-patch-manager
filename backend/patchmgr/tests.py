@@ -21,6 +21,8 @@ from .models import (
     InstalledSoftware,
     Patch,
     PatchStatus,
+    Policy,
+    PolicyStage,
     Software,
 )
 
@@ -62,6 +64,43 @@ class EndpointApiTests(ApiTestBase):
         self.assertEqual(body['patch_statuses'][0]['kb_number'], 'KB5044273')
 
 
+class EndpointListTests(ApiTestBase):
+    def _hostnames(self, **params):
+        body = self.client.get('/api/endpoints/', params).json()
+        return [row['hostname'] for row in body['results']]
+
+    def test_search_by_hostname_ignores_case_and_matches_part(self):
+        self.assertEqual(self._hostnames(search='PC-00'), ['pc-001', 'pc-002'])
+        self.assertEqual(self._hostnames(search='002'), ['pc-002'])
+        self.assertEqual(self._hostnames(search='  PC-002 '), ['pc-002'])  # 앞뒤 공백은 무시
+        self.assertEqual(self._hostnames(search='nothing'), [])
+
+    def test_search_combines_with_group_and_status_filters(self):
+        self.assertEqual(self._hostnames(search='pc', group=self.general_group.id), ['pc-002'])
+        self.assertEqual(self._hostnames(search='pc-001', status='error'), [])
+        self.assertEqual(self._hostnames(search='pc', status='error'), ['pc-002'])
+
+    def test_each_row_has_unapplied_error_and_vulnerable_counts(self):
+        cve = CVE.objects.create(cve_id='CVE-2021-44228', cvss_score='10.0', severity='critical')
+        AffectedSoftware.objects.create(cve=cve, software=self.software, version_end_excluding='2.15.0')
+        rows = {row['hostname']: row for row in self.client.get('/api/endpoints/').json()['results']}
+        # pc-001: KB 적용됨, 설치된 Log4j 2.14.0이 범위(2.15.0 미만)에 들어감
+        self.assertEqual(
+            (rows['pc-001']['unapplied_patch_count'], rows['pc-001']['error_patch_count'], rows['pc-001']['vulnerable_cve_count']),
+            (0, 0, 1),
+        )
+        # pc-002: KB가 오류 상태라 미적용으로도 세고, 설치된 소프트웨어는 없음
+        self.assertEqual(
+            (rows['pc-002']['unapplied_patch_count'], rows['pc-002']['error_patch_count'], rows['pc-002']['vulnerable_cve_count']),
+            (1, 1, 0),
+        )
+
+    def test_counts_are_zero_when_nothing_is_reported(self):
+        PatchStatus.objects.all().delete()
+        rows = self.client.get('/api/endpoints/').json()['results']
+        self.assertTrue(all(row['unapplied_patch_count'] == 0 and row['vulnerable_cve_count'] == 0 for row in rows))
+
+
 class CveAndPatchApiTests(ApiTestBase):
     def test_cve_detail_lists_fixing_patches(self):
         response = self.client.get(f'/api/cves/{self.cve.id}/')
@@ -90,6 +129,17 @@ class PolicyApiTests(ApiTestBase):
         response = self.client.post('/api/policies/', self._payload(), format='json')
         self.assertEqual(response.status_code, 201)
         self.assertEqual([stage['order'] for stage in response.json()['stages']], [1, 2])
+
+    def test_duplicate_policy_name_is_rejected_with_a_korean_message(self):
+        self.client.post('/api/policies/', self._payload(), format='json')
+        response = self.client.post('/api/policies/', self._payload(), format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['name'], ['같은 이름의 정책이 이미 있습니다.'])
+
+    def test_rollback_rate_out_of_range_is_rejected(self):
+        payload = self._payload()
+        payload['stages'][0]['rollback_error_rate'] = 1.5
+        self.assertEqual(self.client.post('/api/policies/', payload, format='json').status_code, 400)
 
     def test_duplicate_stage_order_is_rejected(self):
         payload = self._payload()
@@ -126,12 +176,15 @@ class SeedDemoTests(APITestCase):
         groups, software, endpoints, _ = self._counts()
         self.assertEqual((groups, software, endpoints), (3, 20, 50))
         self.assertEqual(Endpoint.objects.filter(group__name='테스트').count(), 5)
+        policy = Policy.objects.get()  # 시연용 정책 하나
+        self.assertEqual([stage.group.name for stage in policy.stages.all()], ['테스트', '일반'])
 
     def test_seed_is_repeatable(self):
         call_command('seed_demo', stdout=StringIO())
         first = self._counts()
         call_command('seed_demo', stdout=StringIO())
         self.assertEqual(self._counts(), first)
+        self.assertEqual((Policy.objects.count(), PolicyStage.objects.count()), (1, 2))
 
 
 class SeedSamplePatchesTests(APITestCase):

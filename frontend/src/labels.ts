@@ -19,6 +19,9 @@ export const SEVERITY_ENGLISH: Record<SeverityKey, string> = {
   unscored: 'Unscored',
 }
 
+// 정책의 "최소 위험도" 선택지 (낮은 것부터)
+export const MIN_SEVERITY_OPTIONS: Array<'low' | 'medium' | 'high' | 'critical'> = ['low', 'medium', 'high', 'critical']
+
 export function severityKey(value: string): SeverityKey {
   return value === 'critical' || value === 'high' || value === 'medium' || value === 'low' ? value : 'unscored'
 }
@@ -47,4 +50,9 @@ export function formatPercent(rate: number): string {
 
 export function formatDate(iso: string | null): string {
   return iso ? iso.slice(0, 10) : '—'
+}
+
+/** 서버가 보내는 시각은 한국 시간대(+09:00)가 붙어 있어서 앞부분을 그대로 쓰면 한국 시간이 된다 */
+export function formatDateTime(iso: string | null): string {
+  return iso ? iso.slice(0, 16).replace('T', ' ') : '—'
 }

@@ -406,6 +406,175 @@ th.num {
   margin-top: 8px;
 }
 
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.filters input {
+  width: 240px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--axis);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.filters label {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+select {
+  padding: 7px 10px;
+  border: 1px solid var(--axis);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.pager-buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+td.strong {
+  font-weight: 600;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+}
+
+a.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+}
+
+td.actions {
+  display: flex;
+  gap: 14px;
+  white-space: nowrap;
+}
+
+/* ---- 정책 편집 ---- */
+.form-grid {
+  display: grid;
+  grid-template-columns: 2fr 1.4fr 1fr auto;
+  gap: 14px 16px;
+  align-items: end;
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+}
+
+.field > span {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.field input:not([type='checkbox']),
+.field select,
+.stage-row input,
+.stage-row select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--axis);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.field.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.stages {
+  display: grid;
+  gap: 8px;
+}
+
+.stage-row {
+  display: grid;
+  grid-template-columns: 64px 1.2fr 1fr 1fr 176px; /* 마지막 칸을 고정해 제목 줄과 입력 줄의 칸이 어긋나지 않게 한다 */
+  gap: 10px;
+  align-items: center;
+}
+
+.stage-head {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stage-no {
+  font-weight: 600;
+}
+
+.stage-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.notice ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+@media (max-width: 760px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .stage-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stage-head {
+    display: none;
+  }
+  .page-head {
+    flex-direction: column;
+  }
+}
+
 .search-form {
   display: flex;
   gap: 8px;

@@ -64,8 +64,8 @@ def apply_agent_report(payload):
             patch.save(update_fields=['is_error_reported'])
 
 
-def assess_vulnerabilities(endpoint=None):
-    """설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는지 판단한다. endpoint를 주면 그 PC만 본다.
+def assess_vulnerabilities(endpoint=None, endpoint_ids=None):
+    """설치된 소프트웨어 버전이 CVE의 영향 범위에 들어가는지 판단한다. endpoint나 endpoint_ids를 주면 그 PC만 본다.
 
     (PC, CVE, 소프트웨어)마다 한 건을 돌려준다.
       - status 'vulnerable': 영향 범위에 들어감
@@ -79,6 +79,8 @@ def assess_vulnerabilities(endpoint=None):
     installed = InstalledSoftware.objects.select_related('software')
     if endpoint is not None:
         installed = installed.filter(endpoint=endpoint)
+    if endpoint_ids is not None:
+        installed = installed.filter(endpoint_id__in=endpoint_ids)
 
     findings = {}
     for item in installed:
@@ -100,6 +102,35 @@ def assess_vulnerabilities(endpoint=None):
                 'status': status,
             }
     return list(findings.values())
+
+
+def endpoint_stats(endpoint_ids):
+    """PC 목록의 각 줄에 보여 줄 숫자를 PC id별로 돌려준다. (목록 한 쪽에 있는 PC만 계산한다)
+
+      - unapplied: 적용되지 않은 패치 수 (미적용 + 오류 + 롤백)
+      - error: 오류 상태인 패치 수
+      - vulnerable: 설치된 버전이 영향 범위에 들어가는 CVE 수 (판단 불가는 세지 않는다)
+    """
+    stats = {pk: {'unapplied': 0, 'error': 0, 'vulnerable': 0} for pk in endpoint_ids}
+
+    rows = (
+        PatchStatus.objects.filter(endpoint_id__in=endpoint_ids)
+        .values('endpoint_id', 'status')
+        .annotate(total=Count('id'))
+    )
+    for row in rows:
+        if row['status'] != PatchStatus.Status.APPLIED:
+            stats[row['endpoint_id']]['unapplied'] += row['total']
+        if row['status'] == PatchStatus.Status.ERROR:
+            stats[row['endpoint_id']]['error'] += row['total']
+
+    cves = defaultdict(set)
+    for finding in assess_vulnerabilities(endpoint_ids=endpoint_ids):
+        if finding['status'] == 'vulnerable':
+            cves[finding['endpoint_id']].add(finding['cve_id'])
+    for pk, found in cves.items():
+        stats[pk]['vulnerable'] = len(found)
+    return stats
 
 
 def dashboard_summary():

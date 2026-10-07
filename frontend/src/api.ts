@@ -81,6 +81,89 @@ export interface PatchDetail {
   cves: CveSummary[]
 }
 
+export interface Paginated<T> {
+  count: number
+  next: string | null
+  previous: string | null
+  results: T[]
+}
+
+export interface Group {
+  id: number
+  name: string
+}
+
+export interface EndpointRow {
+  id: number
+  hostname: string
+  os_name: string
+  os_build: string
+  group: number
+  group_name: string
+  last_reported_at: string | null
+  unapplied_patch_count: number
+  error_patch_count: number
+  vulnerable_cve_count: number
+}
+
+export interface InstalledSoftwareRow {
+  id: number
+  name: string
+  vendor: string
+  version: string
+}
+
+export interface PatchStatusRow {
+  id: number
+  patch: number
+  kb_number: string
+  target_os: string
+  status: StatusKey
+  error_code: string
+  reported_at: string | null
+}
+
+export interface Vulnerability {
+  cve_id: string
+  severity: string
+  cvss_score: string | null
+  software: string
+  installed_version: string
+  status: 'vulnerable' | 'unknown'
+}
+
+export interface EndpointDetail {
+  id: number
+  hostname: string
+  os_name: string
+  os_build: string
+  group: number
+  group_name: string
+  last_reported_at: string | null
+  installed_software: InstalledSoftwareRow[]
+  patch_statuses: PatchStatusRow[]
+  vulnerabilities: Vulnerability[]
+}
+
+export interface PolicyStage {
+  id?: number
+  order: number
+  group: number
+  delay_minutes: number
+  rollback_error_rate: number // 0.0 ~ 1.0
+}
+
+export interface Policy {
+  id: number
+  name: string
+  min_severity: 'low' | 'medium' | 'high' | 'critical'
+  start_time: string | null // "HH:MM:SS"
+  is_active: boolean
+  stages: PolicyStage[]
+}
+
+export type PolicyInput = Omit<Policy, 'id' | 'stages'> & { stages: Omit<PolicyStage, 'id'>[] }
+
 // ---- 요청 ----
 
 export class ApiError extends Error {
@@ -101,9 +184,55 @@ export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> 
     } catch {
       // 본문이 JSON이 아니면 기본 문구를 쓴다
     }
+    // 404는 서버가 영어 문구를 보내므로(Invalid page. 등) 한국어로 바꿔 보여 준다
+    if (response.status === 404) detail = '요청한 항목(또는 쪽)을 찾을 수 없습니다.'
     throw new ApiError(response.status, detail || `요청에 실패했습니다 (HTTP ${response.status})`)
   }
   return response.json() as Promise<T>
+}
+
+// 서버가 돌려주는 입력 오류의 칸 이름을 한국어로 바꿔 보여 준다
+const FIELD_LABEL: Record<string, string> = {
+  name: '이름',
+  min_severity: '최소 위험도',
+  start_time: '실행 시각',
+  is_active: '사용 여부',
+  stages: '배포 단계',
+  order: '순서',
+  group: '그룹',
+  delay_minutes: '대기 시간',
+  rollback_error_rate: '롤백 오류율',
+}
+
+function flattenErrors(value: unknown, field = ''): string[] {
+  if (typeof value === 'string') return [field ? `${FIELD_LABEL[field] ?? field}: ${value}` : value]
+  if (Array.isArray(value)) return value.flatMap((item) => flattenErrors(item, field))
+  if (value && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, inner]) =>
+      flattenErrors(inner, /^\d+$/.test(key) ? field : key), // 배열 위치(0, 1, ...)는 칸 이름으로 쓰지 않는다
+    )
+  }
+  return []
+}
+
+/** 저장(POST) · 수정(PUT) · 삭제(DELETE). 성공하면 서버가 돌려준 값을 주고, 삭제처럼 값이 없으면 null을 준다. */
+export async function sendJson<T>(method: 'POST' | 'PUT' | 'DELETE', url: string, body?: unknown): Promise<T | null> {
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok) {
+    let data: unknown = null
+    try {
+      data = await response.json()
+    } catch {
+      // 본문이 JSON이 아니면 기본 문구를 쓴다
+    }
+    const message = response.status === 404 ? '요청한 항목을 찾을 수 없습니다.' : flattenErrors(data).join(' / ')
+    throw new ApiError(response.status, message || `요청에 실패했습니다 (HTTP ${response.status})`)
+  }
+  return response.status === 204 ? null : (response.json() as Promise<T>)
 }
 
 export interface ApiState<T> {
