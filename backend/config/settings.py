@@ -152,7 +152,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'ko'  # 서버가 보내는 입력 오류 문구(예: 이미 있는 이름)를 한국어로 만든다
 
 TIME_ZONE = 'Asia/Seoul'
 

@@ -19,6 +19,9 @@ export const SEVERITY_ENGLISH: Record<SeverityKey, string> = {
   unscored: 'Unscored',
 }
 
+// 정책의 "최소 위험도" 선택지 (낮은 것부터)
+export const MIN_SEVERITY_OPTIONS: Array<'low' | 'medium' | 'high' | 'critical'> = ['low', 'medium', 'high', 'critical']
+
 export function severityKey(value: string): SeverityKey {
   return value === 'critical' || value === 'high' || value === 'medium' || value === 'low' ? value : 'unscored'
 }

@@ -1,6 +1,7 @@
 from django.db import transaction
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
 from .models import (
     CVE,
@@ -177,6 +178,11 @@ class PolicyStageSerializer(serializers.ModelSerializer):
 
 
 class PolicySerializer(serializers.ModelSerializer):
+    # 이름 중복 검사기는 안에 문구를 가지고 있어서 필드 설정으로는 바꿀 수 없다. 칸을 직접 선언해 문구를 지정한다.
+    name = serializers.CharField(
+        max_length=100,
+        validators=[UniqueValidator(queryset=Policy.objects.all(), message='같은 이름의 정책이 이미 있습니다.')],
+    )
     stages = PolicyStageSerializer(many=True, required=False)
 
     class Meta:

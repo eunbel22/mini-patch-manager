@@ -21,6 +21,8 @@ from .models import (
     InstalledSoftware,
     Patch,
     PatchStatus,
+    Policy,
+    PolicyStage,
     Software,
 )
 
@@ -128,6 +130,17 @@ class PolicyApiTests(ApiTestBase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual([stage['order'] for stage in response.json()['stages']], [1, 2])
 
+    def test_duplicate_policy_name_is_rejected_with_a_korean_message(self):
+        self.client.post('/api/policies/', self._payload(), format='json')
+        response = self.client.post('/api/policies/', self._payload(), format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['name'], ['같은 이름의 정책이 이미 있습니다.'])
+
+    def test_rollback_rate_out_of_range_is_rejected(self):
+        payload = self._payload()
+        payload['stages'][0]['rollback_error_rate'] = 1.5
+        self.assertEqual(self.client.post('/api/policies/', payload, format='json').status_code, 400)
+
     def test_duplicate_stage_order_is_rejected(self):
         payload = self._payload()
         payload['stages'][1]['order'] = 1
@@ -163,12 +176,15 @@ class SeedDemoTests(APITestCase):
         groups, software, endpoints, _ = self._counts()
         self.assertEqual((groups, software, endpoints), (3, 20, 50))
         self.assertEqual(Endpoint.objects.filter(group__name='테스트').count(), 5)
+        policy = Policy.objects.get()  # 시연용 정책 하나
+        self.assertEqual([stage.group.name for stage in policy.stages.all()], ['테스트', '일반'])
 
     def test_seed_is_repeatable(self):
         call_command('seed_demo', stdout=StringIO())
         first = self._counts()
         call_command('seed_demo', stdout=StringIO())
         self.assertEqual(self._counts(), first)
+        self.assertEqual((Policy.objects.count(), PolicyStage.objects.count()), (1, 2))
 
 
 class SeedSamplePatchesTests(APITestCase):
