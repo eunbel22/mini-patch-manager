@@ -1,0 +1,63 @@
+# 화면(React 빌드 결과)을 서비스하고, API · 관리자 화면 · 정적 파일 요청은 백엔드(gunicorn)로 넘긴다.
+# 브라우저 입장에서는 주소가 하나라 CORS 설정이 필요 없다.
+#
+# 이 파일은 템플릿이다. Nginx 이미지가 시작할 때 ${PATCH_RATE_LIMIT}, ${PATCH_MAX_CONN} 두 값만 환경변수로 바꿔서
+# conf.d/default.conf를 만든다($host 같은 Nginx 변수는 그대로 둔다). 기본값은 Dockerfile에 있다.
+
+# 패치 파일을 내려받는 연결 수 제한용 기억 공간(접속한 주소별로 센다). http 수준이라 server 밖에 둔다.
+limit_conn_zone $binary_remote_addr zone=patch_conn:1m;
+# 제한을 넘으면 기본 503 대신 429(너무 많은 요청)로 답해, 에이전트가 "서버 고장"이 아니라 "나중에 다시"로 알아듣게 한다.
+limit_conn_status 429;
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # Docker의 내장 DNS로 backend의 주소를 10초마다 다시 찾는다. proxy_pass에 이름을 그대로 쓰면 Nginx가 시작할 때
+    # 한 번만 주소를 찾아 기억해서, 백엔드 컨테이너가 다시 만들어져 IP가 바뀌면 502가 계속 난다(부하 테스트 중 실제로 겪음).
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    # 백엔드로 넘기는 경로. /static/은 Django 관리자 화면의 CSS · JS(whitenoise가 서비스)다.
+    location ~ ^/(api|admin|static)/ {
+        set $backend http://backend:8000;
+        proxy_pass $backend;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 패치 파일 배포. 파일은 백엔드(init)가 공유 볼륨에 만들고, 여기서는 읽기만 한다.
+    # 대역폭 제한(QoS)을 Nginx 기능으로 흉내 낸 것이다.
+    #   limit_rate: 연결 하나가 받는 속도의 상한(초당 바이트). 0이면 제한 없음.
+    #   limit_conn: 같은 주소에서 동시에 열 수 있는 연결 수. 넘으면 429.
+    # 둘 다 "연결 단위" 제한이라 서버 전체의 대역폭을 나누어 주는 것은 아니다(연결이 많아지면 합계는 늘어난다).
+    location /patches/ {
+        alias /srv/patches/;
+        autoindex off;
+        gzip off;
+        # 한 번에 보내는 양을 줄인다. 기본값(2m)이면 파일의 앞 1~2MB가 제한 없이 나가서 작은 파일에서는 속도 제한이 덜 보인다.
+        sendfile_max_chunk 64k;
+        limit_rate ${PATCH_RATE_LIMIT};
+        limit_conn patch_conn ${PATCH_MAX_CONN};
+        add_header Cache-Control "no-store";
+    }
+
+    # 파일 이름에 해시가 붙은 빌드 결과는 오래 캐시해도 된다
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # 나머지는 React 화면. 주소(/policies/1 등)를 새로고침해도 열리도록 index.html을 돌려준다.
+    location / {
+        try_files $uri /index.html;
+    }
+}

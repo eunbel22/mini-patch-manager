@@ -105,6 +105,8 @@ jobs:
           check http://127.0.0.1:8080/admin/login/
           check http://127.0.0.1:8080/static/admin/css/base.css
           curl -fsS http://127.0.0.1:8080/ | grep -q 'id="root"'
+          # 패치 파일 경로: 시연 데이터가 없어 파일은 없지만, Nginx의 /patches/가 열려 있으면 없는 파일에 404를 돌려준다(502 · 500이 아님)
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/patches/patch-0.bin); echo "$code /patches/patch-0.bin"; [ "$code" = "404" ]
       - name: 실패했을 때 로그
         if: failure()
         run: docker compose logs --no-color --tail 80

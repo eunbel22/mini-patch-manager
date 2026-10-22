@@ -1,15 +1,22 @@
+import hashlib
+import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from urllib.error import HTTPError
 
 from django.conf import settings
 from django.core.management import call_command
+from django.test import override_settings
 from packaging.version import Version
 from rest_framework.test import APITestCase
 
 from config.celery import app as celery_app
+from patchmgr.management.commands import simulate_agents
 
 from django.utils.timezone import now as django_now
 
@@ -989,3 +996,147 @@ class DeploymentApiTests(DeploymentTestBase):
         self.assertEqual(self.client.get('/api/dashboard/summary/').json()['running_deployments'], 0)
         self.start()
         self.assertEqual(self.client.get('/api/dashboard/summary/').json()['running_deployments'], 1)
+
+
+class PatchPackageTests(DeploymentTestBase):
+    """패치 파일 배포: 파일 만들기, 설치 지시에 파일 정보 넣기, 에이전트의 내려받기와 sha256 확인"""
+
+    SIZE_MB = 0.01  # 10,485바이트
+
+    def make_files(self, directory):
+        with override_settings(PATCH_FILE_DIR=Path(directory)):
+            call_command('make_patch_files', size_mb=self.SIZE_MB, stdout=StringIO())
+
+    def test_make_patch_files_writes_the_file_and_records_its_size_and_sha256(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.make_files(directory)
+            self.patch.refresh_from_db()
+            content = (Path(directory) / f'patch-{self.patch.id}.bin').read_bytes()
+            self.assertEqual(self.patch.package_size, len(content))
+            self.assertEqual(self.patch.package_sha256, hashlib.sha256(content).hexdigest())
+            first = self.patch.package_sha256
+            self.make_files(directory)  # 다시 만들어도 같은 내용이다
+            self.patch.refresh_from_db()
+            self.assertEqual(self.patch.package_sha256, first)
+
+    def test_install_task_has_package_info_only_when_the_file_is_ready(self):
+        self.start()
+        self.assertIsNone(self.client.get('/api/agents/t1/tasks/').json()['install'][0]['package'])
+        with tempfile.TemporaryDirectory() as directory:
+            self.make_files(directory)
+        self.patch.refresh_from_db()
+        package = self.client.get('/api/agents/t1/tasks/').json()['install'][0]['package']
+        self.assertEqual(package, {
+            'url': f'/patches/patch-{self.patch.id}.bin',
+            'size': self.patch.package_size,
+            'sha256': self.patch.package_sha256,
+        })
+
+    def serve(self, directory):
+        """디렉터리의 파일을 내려주는 작은 서버. /patches/busy.bin은 서버가 바쁜 것(429)을 흉내 낸다."""
+        files = Path(directory)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                name = self.path.rsplit('/', 1)[-1]
+                if name == 'busy.bin':
+                    self.send_response(429)
+                    self.end_headers()
+                elif (files / name).exists():
+                    body = (files / name).read_bytes()
+                    self.send_response(200)
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f'http://127.0.0.1:{server.server_address[1]}'
+
+    def package(self):
+        self.patch.refresh_from_db()
+        return {
+            'url': f'/patches/patch-{self.patch.id}.bin',
+            'size': self.patch.package_size,
+            'sha256': self.patch.package_sha256,
+        }
+
+    def test_download_accepts_an_intact_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.make_files(directory)
+            base = self.serve(directory)
+            total, seconds = simulate_agents.download_package(base, self.package())
+        self.assertEqual(total, self.patch.package_size)
+        self.assertGreaterEqual(seconds, 0)
+
+    def test_download_rejects_a_file_changed_on_the_way(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.make_files(directory)
+            base = self.serve(directory)
+            with self.assertRaises(simulate_agents.DigestMismatch):
+                simulate_agents.download_package(base, self.package(), corrupt=True)
+
+    def test_download_rejects_a_wrong_size_even_when_the_start_is_the_same(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.make_files(directory)
+            base = self.serve(directory)
+            package = self.package()
+            package['size'] += 1
+            with self.assertRaises(simulate_agents.DigestMismatch):
+                simulate_agents.download_package(base, package)
+
+    def test_busy_server_and_missing_file_are_not_installs_or_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = self.serve(directory)
+            for url in ('/patches/busy.bin', '/patches/nothing.bin'):
+                with self.assertRaises(simulate_agents.DownloadUnavailable):
+                    simulate_agents.download_package(base, {'url': url, 'size': 1, 'sha256': 'x'})
+
+    def run_simulator(self, download):
+        """모든 PC에게 같은 설치 지시(파일 있음)를 주고, 가상 PC가 보고하려는 내용을 모은다."""
+        tasks_body = {'install': [{
+            'deployment': 1, 'patch': self.patch.id, 'kb_number': 'KB5044273',
+            'package': {'url': '/patches/x.bin', 'size': 1, 'sha256': 'x'},
+        }], 'uninstall': []}
+        reports = []
+        command = simulate_agents.Command
+        with mock.patch.object(command, '_get', return_value=tasks_body), \
+                mock.patch.object(command, '_post', side_effect=lambda url, payload: reports.append(payload) or 202), \
+                mock.patch.object(simulate_agents, 'download_package', side_effect=download):
+            call_command('simulate_agents', apply_rate=1.0, error_rate=0.0, corrupt_rate=1.0, seed=1, stdout=StringIO())
+        return reports
+
+    def test_simulator_reports_an_error_when_the_checksum_does_not_match(self):
+        def tampered(base, package, corrupt=False):
+            raise simulate_agents.DigestMismatch('x')
+
+        reports = self.run_simulator(tampered)
+        self.assertTrue(reports)
+        for report in reports:
+            self.assertNotIn('KB5044273', report['installed_kbs'])
+            self.assertEqual(report['errors'], [{'kb_number': 'KB5044273', 'error_code': simulate_agents.ERROR_BAD_DIGEST}])
+
+    def test_simulator_waits_for_the_next_visit_when_the_server_is_busy(self):
+        def busy(base, package, corrupt=False):
+            raise simulate_agents.DownloadUnavailable('429')
+
+        reports = self.run_simulator(busy)
+        for report in reports:
+            self.assertNotIn('KB5044273', report['installed_kbs'])
+            self.assertEqual(report['errors'], [])  # 오류가 아니라 다음에 다시 시도한다
+
+    def test_simulator_installs_after_a_verified_download(self):
+        def intact(base, package, corrupt=False):
+            return 10, 1.0
+
+        reports = self.run_simulator(intact)
+        for report in reports:
+            self.assertIn('KB5044273', report['installed_kbs'])

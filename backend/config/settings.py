@@ -37,6 +37,11 @@ SECRET_KEY = os.environ.get(
 # 용도라서 평소에는 꺼 둔다(0).
 AGENT_REPORT_SYNC = os.environ.get('AGENT_REPORT_SYNC', '0') == '1'
 
+# 시연용 패치 파일을 두는 폴더. compose에서는 Nginx와 같은 볼륨을 쓴다(Nginx는 읽기만 한다).
+PATCH_FILE_DIR = Path(os.environ.get('PATCH_FILE_DIR', BASE_DIR / 'patch_files'))
+# 에이전트가 파일을 받는 주소의 앞부분. Nginx의 location과 같아야 한다.
+PATCH_FILE_URL_PREFIX = '/patches/'
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
