@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db.models import Count, F, Q
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
@@ -171,7 +172,10 @@ class AgentReportView(APIView):
         payload = serializer.validated_data
         if not Endpoint.objects.filter(hostname=payload['hostname']).exists():
             return Response({'detail': '등록되지 않은 PC입니다.'}, status=status.HTTP_404_NOT_FOUND)
-        process_agent_report.delay(payload)
+        if settings.AGENT_REPORT_SYNC:
+            process_agent_report(payload)  # 비교 측정용: Celery 없이 요청 안에서 끝까지 처리한 뒤 응답한다
+        else:
+            process_agent_report.delay(payload)
         return Response({'status': 'accepted'}, status=status.HTTP_202_ACCEPTED)
 
 

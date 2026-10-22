@@ -1,8 +1,10 @@
 # mini-patch-manager
 
+[![CI](https://github.com/eunbel22/mini-patch-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/eunbel22/mini-patch-manager/actions/workflows/ci.yml)
+
 PC 여러 대의 소프트웨어와 패치 적용 상태를 모아 보여 주고, 정책에 따라 **단계적으로 배포하고 오류가 많으면 자동으로 롤백**하는 미니 패치 관리 시스템입니다. 실제 PC 대신 가상 PC(에이전트 시뮬레이터)로 동작을 시연하는 개인 포트폴리오 프로젝트입니다.
 
-> 이 README는 초안입니다. 아키텍처 그림 보강, 기술 선택 이유, 트러블슈팅, 성능 표, 데모 GIF는 정리 단계에서 더합니다.
+> 이 README는 초안입니다. 아키텍처 그림 보강, 기술 선택 이유, 트러블슈팅, 데모 GIF는 정리 단계에서 더합니다.
 
 ## 할 수 있는 것
 
@@ -85,7 +87,28 @@ npm install
 npm run dev -- --host 127.0.0.1               # http://127.0.0.1:5173
 ```
 
-테스트: `cd backend` 후 `.venv\Scripts\python manage.py test patchmgr`, 화면은 `npm run build`와 `npm run lint`.
+테스트: `cd backend` 후 `.venv\Scripts\python manage.py test patchmgr`, 화면은 `npm run build`와 `npm run lint`. 코드 검사: `pip install -r requirements-dev.txt` 후 `python -m ruff check .`
+
+## 성능
+
+에이전트 1,000대가 한꺼번에 보고할 때 Celery 워커 수별 처리량(한 대의 PC에서 잰 값):
+
+| Celery 워커 | 초당 처리 | 접수 응답 p95 |
+| --- | --- | --- |
+| (Celery 없이) | 59.7건 | 16.0초 |
+| 1개 | 24.8건 | 3.7초 |
+| 4개 (기본값) | 72.1건 | 4.6초 |
+| 16개 | 140.0건 | 6.8초 |
+
+워커를 늘리면 처리량이 늘고(1개에서 16개로 5.6배), 응답은 Celery 없이보다 짧지만, **모든 보고를 다 처리하는 시간은 워커가 적으면 오히려 더 걸립니다.** 방법, 전체 표, 해석, 한계는 [loadtest/README.md](loadtest/README.md)에 있습니다.
+
+## CI
+
+push와 pull request마다 GitHub Actions([.github/workflows/ci.yml](.github/workflows/ci.yml))가 세 가지를 검사합니다.
+
+- 백엔드: ruff 린트, `manage.py check`, 빠진 마이그레이션 검사, 실제 PostgreSQL에서 테스트 95개 (Python 3.12, 배포 이미지와 같은 버전)
+- 화면: 린트, 타입 검사, 빌드
+- Docker: 이미지를 만들고 `docker compose up`으로 전체를 켜서 주요 주소가 열리는지 확인
 
 ## 설계 문서
 

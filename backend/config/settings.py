@@ -33,6 +33,10 @@ SECRET_KEY = os.environ.get(
     'django-insecure-9v28=h5mb*x(4vbj^2l#)6evh(fkqw0fyb50$xsiyjzzg=y79#',
 )
 
+# 1이면 에이전트 보고를 Celery 큐에 넣지 않고 요청 안에서 직접 처리한다. 부하 테스트에서 "Celery 없이"를 비교하려는
+# 용도라서 평소에는 꺼 둔다(0).
+AGENT_REPORT_SYNC = os.environ.get('AGENT_REPORT_SYNC', '0') == '1'
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 

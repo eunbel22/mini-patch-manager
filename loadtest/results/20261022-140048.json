@@ -1,0 +1,390 @@
+{
+  "environment": {
+    "measured_at": "2026-10-22 05:00 UTC",
+    "users": 1000,
+    "repeat": 3,
+    "gunicorn_workers": 3,
+    "cpu": "22",
+    "memory_gb": 15.4
+  },
+  "configs": [
+    {
+      "label": "Celery 없이(요청 안에서 직접 처리)",
+      "sync": true,
+      "celery": null,
+      "runs": [
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 16.76,
+          "api_per_sec": 59.7,
+          "p50_ms": 8700,
+          "p95_ms": 16000,
+          "p99_ms": 16000,
+          "max_ms": 16417,
+          "avg_ms": 8617,
+          "processed": 1000,
+          "process_seconds": 16.76,
+          "process_per_sec": 59.7
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 15.75,
+          "api_per_sec": 63.5,
+          "p50_ms": 8000,
+          "p95_ms": 15000,
+          "p99_ms": 15000,
+          "max_ms": 15418,
+          "avg_ms": 7990,
+          "processed": 1000,
+          "process_seconds": 15.75,
+          "process_per_sec": 63.5
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 17.01,
+          "api_per_sec": 58.8,
+          "p50_ms": 9000,
+          "p95_ms": 16000,
+          "p99_ms": 17000,
+          "max_ms": 16670,
+          "avg_ms": 8900,
+          "processed": 1000,
+          "process_seconds": 17.01,
+          "process_per_sec": 58.8
+        }
+      ],
+      "summary": {
+        "p50_ms": 8700,
+        "p95_ms": 16000,
+        "p99_ms": 16000,
+        "max_ms": 16417,
+        "api_seconds": 16.76,
+        "process_seconds": 16.76,
+        "process_per_sec": 59.7,
+        "failures": 0,
+        "requests": 3000
+      }
+    },
+    {
+      "label": "Celery 워커 1개",
+      "sync": false,
+      "celery": 1,
+      "runs": [
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.16,
+          "api_per_sec": 240.3,
+          "p50_ms": 2300,
+          "p95_ms": 3700,
+          "p99_ms": 3800,
+          "max_ms": 3862,
+          "avg_ms": 2228,
+          "processed": 1000,
+          "process_seconds": 40.35,
+          "process_per_sec": 24.8
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.18,
+          "api_per_sec": 239.5,
+          "p50_ms": 2300,
+          "p95_ms": 3700,
+          "p99_ms": 3800,
+          "max_ms": 3858,
+          "avg_ms": 2198,
+          "processed": 1000,
+          "process_seconds": 40.7,
+          "process_per_sec": 24.6
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.1,
+          "api_per_sec": 243.8,
+          "p50_ms": 2300,
+          "p95_ms": 3600,
+          "p99_ms": 3800,
+          "max_ms": 3785,
+          "avg_ms": 2184,
+          "processed": 1000,
+          "process_seconds": 40.01,
+          "process_per_sec": 25.0
+        }
+      ],
+      "summary": {
+        "p50_ms": 2300,
+        "p95_ms": 3700,
+        "p99_ms": 3800,
+        "max_ms": 3858,
+        "api_seconds": 4.16,
+        "process_seconds": 40.35,
+        "process_per_sec": 24.8,
+        "failures": 0,
+        "requests": 3000
+      }
+    },
+    {
+      "label": "Celery 워커 2개",
+      "sync": false,
+      "celery": 2,
+      "runs": [
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.31,
+          "api_per_sec": 232.0,
+          "p50_ms": 2300,
+          "p95_ms": 3800,
+          "p99_ms": 4000,
+          "max_ms": 3979,
+          "avg_ms": 2300,
+          "processed": 1000,
+          "process_seconds": 21.48,
+          "process_per_sec": 46.5
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.3,
+          "api_per_sec": 232.8,
+          "p50_ms": 2400,
+          "p95_ms": 3800,
+          "p99_ms": 3900,
+          "max_ms": 3964,
+          "avg_ms": 2289,
+          "processed": 1000,
+          "process_seconds": 21.45,
+          "process_per_sec": 46.6
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.5,
+          "api_per_sec": 222.3,
+          "p50_ms": 2300,
+          "p95_ms": 4000,
+          "p99_ms": 4200,
+          "max_ms": 4181,
+          "avg_ms": 2300,
+          "processed": 1000,
+          "process_seconds": 21.23,
+          "process_per_sec": 47.1
+        }
+      ],
+      "summary": {
+        "p50_ms": 2300,
+        "p95_ms": 3800,
+        "p99_ms": 4000,
+        "max_ms": 3979,
+        "api_seconds": 4.31,
+        "process_seconds": 21.45,
+        "process_per_sec": 46.6,
+        "failures": 0,
+        "requests": 3000
+      }
+    },
+    {
+      "label": "Celery 워커 4개",
+      "sync": false,
+      "celery": 4,
+      "runs": [
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 4.84,
+          "api_per_sec": 206.8,
+          "p50_ms": 2600,
+          "p95_ms": 4300,
+          "p99_ms": 4500,
+          "max_ms": 4513,
+          "avg_ms": 2550,
+          "processed": 1000,
+          "process_seconds": 13.05,
+          "process_per_sec": 76.6
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 5.1,
+          "api_per_sec": 195.9,
+          "p50_ms": 2700,
+          "p95_ms": 4600,
+          "p99_ms": 4700,
+          "max_ms": 4783,
+          "avg_ms": 2627,
+          "processed": 1000,
+          "process_seconds": 13.88,
+          "process_per_sec": 72.1
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 5.1,
+          "api_per_sec": 196.2,
+          "p50_ms": 2700,
+          "p95_ms": 4600,
+          "p99_ms": 4700,
+          "max_ms": 4776,
+          "avg_ms": 2645,
+          "processed": 1000,
+          "process_seconds": 13.93,
+          "process_per_sec": 71.8
+        }
+      ],
+      "summary": {
+        "p50_ms": 2700,
+        "p95_ms": 4600,
+        "p99_ms": 4700,
+        "max_ms": 4776,
+        "api_seconds": 5.1,
+        "process_seconds": 13.88,
+        "process_per_sec": 72.1,
+        "failures": 0,
+        "requests": 3000
+      }
+    },
+    {
+      "label": "Celery 워커 8개",
+      "sync": false,
+      "celery": 8,
+      "runs": [
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 5.7,
+          "api_per_sec": 175.4,
+          "p50_ms": 3000,
+          "p95_ms": 5100,
+          "p99_ms": 5300,
+          "max_ms": 5388,
+          "avg_ms": 2927,
+          "processed": 1000,
+          "process_seconds": 9.04,
+          "process_per_sec": 110.6
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 5.99,
+          "api_per_sec": 167.0,
+          "p50_ms": 3200,
+          "p95_ms": 5400,
+          "p99_ms": 5600,
+          "max_ms": 5654,
+          "avg_ms": 3086,
+          "processed": 1000,
+          "process_seconds": 9.58,
+          "process_per_sec": 104.4
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 6.26,
+          "api_per_sec": 159.8,
+          "p50_ms": 3200,
+          "p95_ms": 5700,
+          "p99_ms": 5900,
+          "max_ms": 5944,
+          "avg_ms": 3156,
+          "processed": 1000,
+          "process_seconds": 10.18,
+          "process_per_sec": 98.2
+        }
+      ],
+      "summary": {
+        "p50_ms": 3200,
+        "p95_ms": 5400,
+        "p99_ms": 5600,
+        "max_ms": 5654,
+        "api_seconds": 5.99,
+        "process_seconds": 9.58,
+        "process_per_sec": 104.4,
+        "failures": 0,
+        "requests": 3000
+      }
+    },
+    {
+      "label": "Celery 워커 16개",
+      "sync": false,
+      "celery": 16,
+      "runs": [
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 7.24,
+          "api_per_sec": 138.1,
+          "p50_ms": 3800,
+          "p95_ms": 6600,
+          "p99_ms": 6800,
+          "max_ms": 6902,
+          "avg_ms": 3770,
+          "processed": 1000,
+          "process_seconds": 6.94,
+          "process_per_sec": 144.1
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 7.45,
+          "api_per_sec": 134.3,
+          "p50_ms": 3800,
+          "p95_ms": 6800,
+          "p99_ms": 7100,
+          "max_ms": 7120,
+          "avg_ms": 3792,
+          "processed": 1000,
+          "process_seconds": 7.14,
+          "process_per_sec": 140.0
+        },
+        {
+          "users": 1000,
+          "requests": 1000,
+          "failures": 0,
+          "api_seconds": 8.23,
+          "api_per_sec": 121.5,
+          "p50_ms": 4400,
+          "p95_ms": 7500,
+          "p99_ms": 7800,
+          "max_ms": 7893,
+          "avg_ms": 4276,
+          "processed": 1000,
+          "process_seconds": 8.76,
+          "process_per_sec": 114.1
+        }
+      ],
+      "summary": {
+        "p50_ms": 3800,
+        "p95_ms": 6800,
+        "p99_ms": 7100,
+        "max_ms": 7120,
+        "api_seconds": 7.45,
+        "process_seconds": 7.14,
+        "process_per_sec": 140.0,
+        "failures": 0,
+        "requests": 3000
+      }
+    }
+  ]
+}

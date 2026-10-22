@@ -18,6 +18,9 @@ x-backend: &backend
     POSTGRES_HOST: db
     CELERY_BROKER_URL: amqp://guest:guest@mq:5672//
     NVD_API_KEY: ${NVD_API_KEY:-}
+    GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+    # 1이면 에이전트 보고를 큐에 넣지 않고 요청 안에서 바로 처리한다. "Celery 없이"와 비교하는 부하 테스트용이며 켜지 않는다.
+    AGENT_REPORT_SYNC: ${AGENT_REPORT_SYNC:-0}
   depends_on: &backend-depends
     db:
       condition: service_healthy
@@ -92,7 +95,8 @@ services:
       <<: *backend-depends
       mq:
         condition: service_healthy
-    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "4"]
+    # 동시에 처리하는 작업 수. 부하 테스트에서 바꿔 가며 비교한다 (CELERY_CONCURRENCY=8 docker compose up -d worker)
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "${CELERY_CONCURRENCY:-4}"]
     restart: unless-stopped
 
   beat:

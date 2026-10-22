@@ -219,3 +219,6 @@ __marimo__/
 
 # 개인 준비 기록 (GitHub에 올리지 않음)
 file/
+
+# 부하 테스트의 임시 파일 (결과 JSON은 올린다)
+loadtest/.venv/

@@ -259,6 +259,17 @@ class AgentReportApiTests(ApiTestBase):
     def test_unknown_hostname_is_rejected(self):
         self.assertEqual(self._report(hostname='no-such-pc').status_code, 404)
 
+    def test_sync_mode_processes_inside_the_request_without_the_queue(self):
+        """부하 테스트용 AGENT_REPORT_SYNC=1: 큐를 거치지 않고 요청 안에서 처리한다 (기본은 꺼짐)"""
+        self.assertFalse(settings.AGENT_REPORT_SYNC)
+        PatchStatus.objects.filter(endpoint=self.pc1).update(status='pending')
+        with self.settings(AGENT_REPORT_SYNC=True), \
+                mock.patch('patchmgr.views.process_agent_report.delay') as queued:
+            response = self._report()
+        queued.assert_not_called()  # 큐에 넣지 않았다
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(PatchStatus.objects.get(endpoint=self.pc1, patch=self.patch).status, 'applied')
+
     def test_invalid_payload_is_rejected(self):
         response = self.client.post('/api/agents/report/', {'os_name': 'Windows 10 22H2'}, format='json')
         self.assertEqual(response.status_code, 400)
@@ -963,8 +974,10 @@ class DeploymentApiTests(DeploymentTestBase):
         Patch.objects.create(kb_number='KB1', target_os=self.OS)  # CVE가 없어 대상이 아님
         busy = Patch.objects.create(kb_number='KB2', target_os='Windows 11 23H2')
         busy.cves.add(self.cve)
-        names = lambda: [row['kb_number'] for row in
-                         self.client.get('/api/patches/', {'policy': self.policy.id}).json()['results']]
+        def names():
+            body = self.client.get('/api/patches/', {'policy': self.policy.id}).json()
+            return [row['kb_number'] for row in body['results']]
+
         self.assertEqual(names(), ['KB2', 'KB5044273'])
         self.start()  # KB5044273 배포 시작 -> 목록에서 빠진다
         self.assertEqual(names(), ['KB2'])
