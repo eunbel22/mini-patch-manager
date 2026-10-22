@@ -11,6 +11,7 @@
 """
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count
 from django.utils import timezone
@@ -167,12 +168,24 @@ def advance_all(now=None):
     return changed
 
 
+def package_info(patch):
+    """에이전트가 내려받을 패치 파일 정보. 파일을 아직 만들지 않았으면(sha256이 없으면) None이라 지시만 나간다."""
+    if not patch.package_sha256:
+        return None
+    return {
+        'url': f'{settings.PATCH_FILE_URL_PREFIX}patch-{patch.id}.bin',
+        'size': patch.package_size,
+        'sha256': patch.package_sha256,
+    }
+
+
 def tasks_for_endpoint(endpoint, now=None):
     """에이전트(PC)가 서버에 물어서 가져가는 일 목록.
 
     install: 설치해도 되는 KB. 진행 중인 배포 중 이 PC의 그룹이 현재 단계이고, 그 단계의 대기 시간이 지났고,
              패치의 대상 Windows가 이 PC와 같고, 아직 설치 전(상태 줄이 없거나 미적용)인 것만 나간다.
              설치에 실패한 PC(오류)에게는 다시 지시하지 않는다.
+             package: 내려받을 파일의 주소 · 크기 · sha256 (파일이 준비된 패치만. 에이전트는 받은 뒤 sha256을 확인한다).
     uninstall: 롤백된 패치. 에이전트가 설치돼 있다면 제거한다.
     """
     now = now or timezone.now()
@@ -190,6 +203,7 @@ def tasks_for_endpoint(endpoint, now=None):
         if status_by_patch.get(deployment.patch_id) in (None, PatchStatus.Status.PENDING):
             install.append({
                 'deployment': deployment.id, 'patch': deployment.patch_id, 'kb_number': deployment.patch.kb_number,
+                'package': package_info(deployment.patch),
             })
 
     rolled_back = PatchStatus.objects.filter(endpoint=endpoint, status=PatchStatus.Status.ROLLED_BACK).select_related('patch')

@@ -25,6 +25,8 @@ COPY . .
 # 관리자 화면의 정적 파일을 모아 둔다 (whitenoise가 서비스한다). 이 단계는 DB를 쓰지 않는다.
 RUN python3.12 manage.py collectstatic --noinput \
     && chown -R app:app /app
+# 시연용 패치 파일을 두는 곳. compose에서는 이 자리에 볼륨을 붙여 Nginx와 나눠 쓴다(일반 사용자가 쓸 수 있어야 한다).
+RUN mkdir -p /srv/patches && chown app:app /srv/patches
 USER app
 
 EXPOSE 8000

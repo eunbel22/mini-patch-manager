@@ -44,7 +44,7 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 | 단계적 배포 | `POST /api/policies/{id}/deploy/` | 배포 시작. 본문 `{"patch": 번호}`, 한 번에 패치 하나. 1단계(보통 테스트 그룹)부터 시작하고 `201`로 진행 상태를 돌려준다. 꺼 둔 정책 · 단계 없음 · 정책의 최소 위험도에 못 미치는 패치는 `400`, 그 패치의 배포가 이미 진행 중이면 `409` |
 | | `GET /api/policies/{id}/status/` | 이 정책의 배포 진행 상태(최근 20건). 배포마다 상태(진행 중 · 완료 · 롤백됨), 롤백 사유, 단계별 대상 PC 수 · 적용 · 오류 · 미적용 · 롤백 수 · 오류율 · 단계 상태(끝남 · 진행 중 · 대기 중 · 롤백 기준 초과 · 실행 전) |
 | | `GET /api/patches/` | 패치(KB) 목록. `?policy=<정책 id>`를 주면 그 정책으로 배포할 수 있는 패치(최소 위험도 이상이고 진행 중인 배포가 없는 것)만 준다 |
-| 에이전트 지시 | `GET /api/agents/{호스트}/tasks/` | 에이전트가 서버에 물어서 가져가는 일: `install`(설치해도 되는 KB), `uninstall`(롤백되어 제거할 KB). 등록되지 않은 PC는 `404` |
+| 에이전트 지시 | `GET /api/agents/{호스트}/tasks/` | 에이전트가 서버에 물어서 가져가는 일: `install`(설치해도 되는 KB와 내려받을 파일 `package`: 주소 · 크기 · sha256, 파일이 아직 없으면 `null`), `uninstall`(롤백되어 제거할 KB). 등록되지 않은 PC는 `404` |
 
 모든 주소는 끝에 `/`를 붙여 호출한다 (예: `POST /api/agents/report/`).
 
@@ -106,6 +106,21 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 6. **보호**: 진행 중인 배포가 있는 정책은 배포 단계를 바꿀 수 없고(`400`) 삭제할 수 없다(`409`). 정책의 다른 값(이름, 사용 여부 등)은 바꿀 수 있다.
 7. **한계**: 오래 보고하지 않는 PC가 있으면 그 단계가 "모두 결과를 냄"에 도달하지 못해 멈춘다(시간 제한은 넣지 않았다). 오류율의 분모에도 그 PC가 남는다. 수동 승인(단계마다 사람이 누르기)은 없다. 정책의 **실행 시각(`start_time`)은 저장만 하고 배포 로직에서는 쓰지 않는다**(배포는 시작을 누른 즉시 1단계로 들어간다). 실행 주기도 없다.
 
+### 패치 파일 배포와 속도 제한 (Nginx)
+
+설치 지시에 파일의 내려받기 정보를 함께 주고, 파일은 Nginx가 내려준다. 실제 Microsoft 패치가 아니라 **시연용 파일**(무작위 바이트)이다.
+
+1. **파일 만들기**: `manage.py make_patch_files [--size-mb 2]`가 패치마다 `patch-{패치 id}.bin`을 만들고, 크기(`Patch.package_size`)와 sha256(`Patch.package_sha256`)을 DB에 적는다. 같은 패치와 크기면 내용이 같아서 다시 만들어도 sha256이 같다. compose에서는 `init`이 시연 데이터와 함께 만들고, 파일은 Nginx와 나눠 쓰는 볼륨(`patchfiles`)에 둔다(Nginx는 읽기만).
+2. **지시에 정보 넣기**: `tasks`의 `install` 항목에 `package`(`url`, `size`, `sha256`)가 들어간다. 파일을 아직 안 만든 패치는 `null`이라 예전처럼 지시만 나간다.
+3. **내려받기**: 에이전트가 서버 주소 뒤에 `package.url`(`/patches/...`)을 붙여 받는다. Nginx가 파일을 내려주면서 두 가지를 제한한다.
+   - `limit_rate`: 연결 하나의 속도 상한(환경변수 `PATCH_RATE_LIMIT`, 기본 `1m` = 초당 1MiB, `0`이면 제한 없음). 한 번에 보내는 양을 줄여(`sendfile_max_chunk 64k`) 작은 파일에서도 제한이 적용된다.
+   - `limit_conn`: 같은 주소에서 동시에 열 수 있는 연결 수(`PATCH_MAX_CONN`, 기본 2). 넘으면 **429**로 거절한다.
+4. **검증**: 에이전트는 다 받은 뒤 **크기와 sha256**이 `package`와 같은지 확인한다.
+   - 같으면 설치하고 보고한다.
+   - 다르면(받는 도중 바뀌었거나 깨진 파일) **설치하지 않고** 오류 코드 `0x80096010`으로 보고한다. 이 오류는 다른 설치 실패와 똑같이 단계의 오류율에 들어가 롤백 판단에 쓰인다.
+   - 서버가 바쁘거나(429 · 503) 받지 못하면 **오류로 세지 않고** 이번 접속에서는 설치하지 않는다. 다음 접속에서 다시 시도한다.
+5. **한계**: `limit_rate`와 `limit_conn`은 **연결 단위** 제한이라 서버 전체 대역폭을 나누어 주는 QoS가 아니다(연결이 늘면 합계도 는다). QoS를 Nginx 기능으로 흉내 낸 것이다. sha256 확인은 "받은 파일이 서버가 알려 준 것과 같은가"만 보며, 서버 자체가 뚫린 경우나 디지털 서명 검증은 하지 않는다. 컨테이너 밖 개발 환경(`runserver`)에서는 `/patches/`를 내려주는 Nginx가 없다.
+
 ### 버전 비교 규칙
 
 PC에 설치된 버전이 `AffectedSoftware` 한 줄의 범위에 들어가는지 판단하는 규칙이다 (`patchmgr/versions.py`).
@@ -145,7 +160,7 @@ erDiagram
 | CVE | cve_id, description, cvss_score, severity, published_at | NVD에서 수집. severity는 CVSS 3.1 등급(Low · Medium · High · Critical) |
 | SoftwareCpe | software, vendor, product | 우리 소프트웨어와 NVD의 제조사:제품 이름(CPE)을 잇는 매핑. 소프트웨어 하나에 NVD 이름이 여러 개일 수 있어(Adobe Reader 2개, Notepad++ 제조사 3개, 한컴오피스는 버전마다 제품이 따로) 칸이 아니라 표로 둔다. 계획에 없던 표 |
 | AffectedSoftware | cve, software, version_start_including, version_start_excluding, version_end_including, version_end_excluding, version_exact | 어느 SW의 어느 버전이 영향받는지. NVD의 버전 범위 네 가지(이상 · 초과 · 이하 · 미만)와 특정 버전 하나를 그대로 담는다. 모두 비면 모든 버전이 해당. CVE를 수집할 때 SoftwareCpe로 우리 소프트웨어와 이어지는 것만 저장한다. 계획에 없던 연결표 |
-| Patch | kb_number, title, target_os, fixed_build, release_date, download_url, is_error_reported | KB 하나. 같은 CVE라도 Windows 종류마다 KB가 다르므로 target_os를 둔다. is_error_reported는 오류 보고 패치 분류용 |
+| Patch | kb_number, title, target_os, fixed_build, release_date, download_url, package_size, package_sha256, is_error_reported | KB 하나. 같은 CVE라도 Windows 종류마다 KB가 다르므로 target_os를 둔다. is_error_reported는 오류 보고 패치 분류용. package_size · package_sha256은 Nginx가 내려주는 시연용 패치 파일의 크기와 검증값(파일을 만들기 전에는 비어 있음) |
 | Patch ↔ CVE | (다대다) | KB 하나가 여러 CVE를 고치고, CVE 하나를 여러 KB가 고친다 |
 | PatchStatus | endpoint, patch, status, error_code, reported_at | PC와 패치 한 쌍당 한 줄. status는 미적용 · 적용 · 오류 · 롤백. (endpoint, patch)는 한 줄 |
 | Policy | name, min_severity, start_time, is_active | 정책 본체. min_severity 이상인 패치가 대상 |

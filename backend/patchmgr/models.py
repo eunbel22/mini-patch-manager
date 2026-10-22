@@ -126,6 +126,10 @@ class Patch(models.Model):
     fixed_build = models.CharField(max_length=50, blank=True)
     release_date = models.DateField(null=True, blank=True)
     download_url = models.URLField(max_length=500, blank=True)
+    # 에이전트가 우리 서버(Nginx)에서 내려받는 패치 파일. 없으면 파일 없이 지시만 나간다.
+    # sha256은 서버가 만든 값이고, 에이전트가 받은 파일과 비교해 중간에 바뀌었는지 확인한다.
+    package_size = models.PositiveBigIntegerField(null=True, blank=True)
+    package_sha256 = models.CharField(max_length=64, blank=True)
     is_error_reported = models.BooleanField(default=False)
     cves = models.ManyToManyField(CVE, related_name='patches', blank=True)
 

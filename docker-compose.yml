@@ -14,13 +14,19 @@ x-backend: &backend
     DJANGO_DEBUG: "0"
     # 로컬 시연용 값이다. 실제로 배포한다면 반드시 바꾼다.
     DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-compose-demo-secret-key-change-me}
-    DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
+    DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend,frontend
     POSTGRES_HOST: db
     CELERY_BROKER_URL: amqp://guest:guest@mq:5672//
     NVD_API_KEY: ${NVD_API_KEY:-}
     GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
     # 1이면 에이전트 보고를 큐에 넣지 않고 요청 안에서 바로 처리한다. "Celery 없이"와 비교하는 부하 테스트용이며 켜지 않는다.
     AGENT_REPORT_SYNC: ${AGENT_REPORT_SYNC:-0}
+    # 시연용 패치 파일을 두는 곳(Nginx와 같은 볼륨)
+    PATCH_FILE_DIR: /srv/patches
+    # 컨테이너 안에서 가상 PC(simulate_agents)를 돌릴 때의 서버 주소. 패치 파일은 Nginx가 내려주므로 Nginx를 거친다.
+    SIMULATOR_BASE: http://frontend
+  volumes:
+    - patchfiles:/srv/patches
   depends_on: &backend-depends
     db:
       condition: service_healthy
@@ -73,6 +79,8 @@ services:
         if [ "$$SEED_DEMO" = "1" ]; then
           python3.12 manage.py seed_demo
           python3.12 manage.py seed_sample_patches
+          # 패치마다 시연용 파일(기본 2MB)을 만들고 크기와 sha256을 기록한다. Nginx가 /patches/로 내려준다.
+          python3.12 manage.py make_patch_files
           # 시연용 실제 CVE 5개를 NVD에서 가져온다 (대시보드의 취약한 PC 그래프에 쓰인다). 인터넷이 없어도 전체를 멈추지 않는다.
           python3.12 manage.py fetch_cves --cve-id CVE-2021-44228 CVE-2024-7971 CVE-2023-40031 CVE-2024-11477 CVE-2024-41869 \
             || echo "NVD에 연결하지 못해 시연용 CVE 가져오기를 건너뜁니다."
@@ -112,6 +120,12 @@ services:
     build: ./frontend
     image: mini-patch-manager-frontend
     ports: ["8080:80"]
+    environment:
+      # 패치 파일 내려받기 제한: 연결당 초당 속도(0이면 제한 없음)와 같은 주소의 동시 연결 수
+      PATCH_RATE_LIMIT: ${PATCH_RATE_LIMIT:-1m}
+      PATCH_MAX_CONN: ${PATCH_MAX_CONN:-2}
+    volumes:
+      - patchfiles:/srv/patches:ro
     depends_on:
       backend:
         condition: service_healthy
@@ -119,3 +133,4 @@ services:
 
 volumes:
   pgdata:
+  patchfiles:

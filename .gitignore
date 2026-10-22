@@ -222,3 +222,6 @@ file/
 
 # 부하 테스트의 임시 파일 (결과 JSON은 올린다)
 loadtest/.venv/
+
+# 시연용 패치 파일(make_patch_files가 만든다)
+backend/patch_files/

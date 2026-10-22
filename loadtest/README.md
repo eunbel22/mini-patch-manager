@@ -55,3 +55,32 @@ python -m venv .venv
 - `locustfile.py`: 가상 에이전트. `LOAD_MODE=burst`(기본, 에이전트마다 한 번씩)와 `steady`(5~10초 간격으로 계속)가 있습니다.
 - `benchmark.py`: compose를 켜고, 워커 수를 바꿔 다시 띄우고, Locust를 실행하고, 워커 로그에서 처리 시간을 읽습니다.
 - Celery 워커 수는 `CELERY_CONCURRENCY`, gunicorn 워커 수는 `GUNICORN_WORKERS`, "Celery 없이" 비교용 스위치는 `AGENT_REPORT_SYNC=1`입니다. 이 스위치는 부하 테스트 전용이며 기본은 꺼져 있습니다.
+
+## 패치 파일 내려받기 제한 (Nginx)
+
+`patch_download_check.py`는 패치 파일 내려받기에 걸어 둔 두 가지 제한(`limit_rate`, `limit_conn`)이 실제로 걸리는지 잽니다. 연결 하나로 3번 받아 속도의 중앙값을 보고, 5개를 한꺼번에 받아 성공(200)과 거절(429)을 셉니다. 2026-10-22, 파일 2MB, 한 대의 PC 안의 Docker에서 잰 값입니다.
+
+| 속도 제한 | 같은 주소 동시 연결 제한 | 연결 1개 속도 (중앙값, 최소~최대) | 동시 5개 결과 | 성공한 연결의 합계 |
+| --- | --- | --- | --- | --- |
+| 없음(`0`) | 1000 | 238.95MB/초 (46.20~301.45) | 성공 5, 거절 0 | 497.40MB/초 |
+| `4m` | 2 | 4.04MB/초 (3.88~4.19) | 성공 2, 거절 3 | 8.39MB/초 |
+| `1m` (기본) | 2 | 1.02MB/초 (1.01~1.02) | 성공 2, 거절 3 | 2.07MB/초 |
+| `512k` | 2 | 0.51MB/초 (0.51~0.51) | 성공 2, 거절 3 | 1.03MB/초 |
+| `1m` | 10 | 1.02MB/초 (1.01~1.02) | 성공 5, 거절 0 | 5.16MB/초 |
+
+**말할 수 있는 것**
+- 속도 제한은 설정한 값에 맞게(위 표에서 오차 약 1~2%) 걸립니다. 제한이 없으면 같은 파일이 수백 MB/초로 내려갑니다(로컬 PC 안의 통신이라 이 값 자체는 의미가 없습니다).
+- 같은 주소의 동시 연결이 제한(2)을 넘으면 Nginx가 429로 거절합니다. 에이전트(`simulate_agents`)는 429를 오류로 세지 않고 이번 접속에서는 설치하지 않으며 다음에 다시 시도합니다.
+
+**말하면 안 되는 것 · 한계**
+- **서버 전체 대역폭을 제한한 것이 아닙니다.** 제한은 연결 단위라, 마지막 줄처럼 연결 제한을 풀면 5개 연결의 합계가 5.16MB/초로 연결 수에 비례해 늘어납니다. "QoS를 구현했다"가 아니라 "Nginx 기능으로 QoS를 흉내 냈다"입니다.
+- 한 번에 보내는 양(`sendfile_max_chunk`)을 줄이지 않으면 파일 앞부분 1~2MB가 제한 없이 나가서, 8MB 파일은 7.0초(평균 1.14MB/초), 2MB 파일은 1.0초에 내려와 제한이 덜 보였습니다(같은 날 측정). 지금은 64k로 줄여 2MB가 약 2초에 내려옵니다.
+- 실제 Microsoft 패치가 아니라 시연용 파일이고, 한 PC에서 모두 돌린 값입니다. 수백 대가 동시에 받는 경우와 네트워크가 느린 환경은 재지 않았습니다.
+
+다시 재는 방법(별도 환경에서):
+
+```
+docker compose -p mpmdemo -f docker-compose.yml -f loadtest/compose.bench.yml up -d --build   # 화면 포트 18080
+PATCH_RATE_LIMIT=512k PATCH_MAX_CONN=2 docker compose -p mpmdemo -f docker-compose.yml -f loadtest/compose.bench.yml up -d --no-deps frontend
+python loadtest/patch_download_check.py --base http://127.0.0.1:18080 --runs 3 --parallel 5
+```

@@ -282,10 +282,19 @@ class DeploymentStatusSerializer(serializers.Serializer):
     stages = StageProgressSerializer(many=True)
 
 
+class AgentPackageSerializer(serializers.Serializer):
+    """내려받을 패치 파일. url은 서버 주소 뒤에 붙이는 경로이고, 받은 파일의 sha256이 같아야 설치한다."""
+
+    url = serializers.CharField()
+    size = serializers.IntegerField()
+    sha256 = serializers.CharField()
+
+
 class AgentInstallTaskSerializer(serializers.Serializer):
     deployment = serializers.IntegerField()
     patch = serializers.IntegerField()
     kb_number = serializers.CharField()
+    package = AgentPackageSerializer(allow_null=True)
 
 
 class AgentUninstallTaskSerializer(serializers.Serializer):
