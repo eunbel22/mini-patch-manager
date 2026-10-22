@@ -1,0 +1,9 @@
+# 부하 테스트 전용 덮어쓰기. 기존 개발 환경(DB 5432, 큐 5672, 화면 8080)과 겹치지 않게 포트를 바꾼다.
+# 사용: docker compose -p mpmbench -f docker-compose.yml -f loadtest/compose.bench.yml up -d
+services:
+  db:
+    ports: !reset []
+  mq:
+    ports: !reset []
+  frontend:
+    ports: !override ["18080:80"]

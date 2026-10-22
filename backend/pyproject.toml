@@ -1,0 +1,8 @@
+# 코드 검사(ruff) 설정. CI와 로컬이 같은 규칙을 쓴다: `python -m ruff check .`
+[tool.ruff]
+extend-exclude = ["staticfiles"]
+
+[tool.ruff.lint]
+# 진짜 오류만 막는다: 문법 오류(E9), 안 쓰는 import · 정의 안 된 이름(F), 잘못된 비교 같은 흔한 실수(E4, E7).
+# 줄 길이나 import 정렬 같은 스타일 규칙은 일부러 켜지 않았다.
+select = ["E4", "E7", "E9", "F"]

@@ -88,6 +88,8 @@ PC 여러 대의 소프트웨어 설치 현황과 보안 패치 적용 상태를
 | `worker`, `beat` | Celery 워커(Linux 기본 방식), Celery Beat |
 | `frontend` | Nginx. React 빌드 결과를 서비스하고 `/api`, `/admin`, `/static`은 백엔드로 넘긴다. 주소가 하나(8080)라 CORS 설정이 필요 없다 |
 
+부하 테스트에서 바꾸는 값은 환경 변수다: `CELERY_CONCURRENCY`(Celery 워커 동시 처리 수, 기본 4), `GUNICORN_WORKERS`(기본 3), `AGENT_REPORT_SYNC`(1이면 보고를 큐에 넣지 않고 요청 안에서 처리, 비교 측정 전용이며 기본 0). 방법과 결과는 `loadtest/README.md`. Nginx는 Docker 내장 DNS로 `backend`의 주소를 10초마다 다시 찾는다(백엔드 컨테이너가 다시 만들어져 IP가 바뀌어도 502가 나지 않게).
+
 백엔드 이미지는 Rocky Linux 9 + Python 3.12, 일반 사용자(uid 10001)로 실행한다. 비밀 값(NVD 키)은 이미지나 compose 파일에 넣지 않고 `.env`에서 읽는다. 설정은 환경 변수(`DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `POSTGRES_HOST`, `CELERY_BROKER_URL` 등)로 바꾼다.
 
 ### 배포 규칙 (정책에 따른 동작)
